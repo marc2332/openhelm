@@ -108,51 +108,36 @@ enum ProfilesCommand {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-// ─── In-memory log layer ──────────────────────────────────────────────────────
+// ─── In-memory log writer ─────────────────────────────────────────────────────
 
-struct LogBufferLayer(Arc<LogBuffer>);
+/// Implements `io::Write` by appending formatted lines to a `LogBuffer`.
+struct LogBufferWriter(Arc<LogBuffer>);
 
-impl<S> tracing_subscriber::Layer<S> for LogBufferLayer
-where
-    S: tracing::Subscriber,
-{
-    fn enabled(
-        &self,
-        metadata: &tracing::Metadata<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) -> bool {
-        metadata.target().starts_with("opencontrol")
-    }
-
-    fn on_event(
-        &self,
-        event: &tracing::Event<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) {
-        use tracing_subscriber::field::Visit;
-
-        struct Visitor(String);
-        impl Visit for Visitor {
-            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "message" {
-                    self.0 = format!("{:?}", value).trim_matches('"').to_string();
-                }
-            }
-            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-                if field.name() == "message" {
-                    self.0 = value.to_string();
-                }
+impl std::io::Write for LogBufferWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(s) = std::str::from_utf8(buf) {
+            let line = s.trim_end_matches('\n').to_string();
+            if !line.is_empty() {
+                self.0.push(line);
             }
         }
+        Ok(buf.len())
+    }
 
-        let mut visitor = Visitor(String::new());
-        event.record(&mut visitor);
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
-        let level = event.metadata().level();
-        let target = event.metadata().target();
-        let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
-        let line = format!("{} {:5} [{}] {}", ts, level, target, visitor.0);
-        self.0.push(line);
+/// `MakeWriter` implementation so `tracing_subscriber::fmt` can use the buffer.
+#[derive(Clone)]
+struct MakeLogBufferWriter(Arc<LogBuffer>);
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for MakeLogBufferWriter {
+    type Writer = LogBufferWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        LogBufferWriter(self.0.clone())
     }
 }
 
@@ -173,7 +158,12 @@ async fn main() -> Result<()> {
                 .compact()
                 .with_filter(env_filter),
         )
-        .with(LogBufferLayer(log_buf.clone()))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_writer(MakeLogBufferWriter(log_buf.clone()))
+                .with_filter(EnvFilter::new("opencontrol=info")),
+        )
         .init();
 
     match cli.command {
@@ -228,10 +218,7 @@ async fn cmd_start(log_buf: Arc<LogBuffer>) -> Result<()> {
 
 async fn cmd_stop() -> Result<()> {
     let cfg = config::Config::load().await.ok();
-    let socket = cfg
-        .as_ref()
-        .map(|c| c.daemon.socket_path.as_str())
-        .unwrap_or("/tmp/opencontrol.sock");
+    let socket = socket_path(cfg.as_ref());
     match client_call(socket, &IpcRequest::Shutdown).await {
         Ok(_) => println!("Daemon stopped"),
         Err(e) => bail!("Daemon is not running: {}", e),
@@ -241,10 +228,7 @@ async fn cmd_stop() -> Result<()> {
 
 async fn cmd_status() -> Result<()> {
     let cfg = config::Config::load().await.ok();
-    let socket = cfg
-        .as_ref()
-        .map(|c| c.daemon.socket_path.as_str())
-        .unwrap_or("/tmp/opencontrol.sock");
+    let socket = socket_path(cfg.as_ref());
 
     match client_call(socket, &IpcRequest::Status).await {
         Ok(IpcResponse::Status {
@@ -289,10 +273,7 @@ async fn cmd_restart() -> Result<()> {
 
 async fn cmd_logs(follow: bool, lines: usize) -> Result<()> {
     let cfg = config::Config::load().await.ok();
-    let socket = cfg
-        .as_ref()
-        .map(|c| c.daemon.socket_path.as_str())
-        .unwrap_or("/tmp/opencontrol.sock");
+    let socket = socket_path(cfg.as_ref());
 
     // Fetch initial batch
     let total = match client_call(socket, &IpcRequest::Logs { lines, offset: 0 }).await {
@@ -513,7 +494,7 @@ async fn cmd_chat(profile: String) -> Result<()> {
     // Validate profile exists locally before connecting to daemon
     cfg.require_profile(&profile)?;
 
-    let socket = cfg.daemon.socket_path.clone();
+    let socket = &cfg.daemon.socket_path;
 
     println!("OpenControl CLI Chat [profile: {}]", profile);
     println!("(type 'exit' or Ctrl+C to quit, '/reset' to clear history)");
@@ -602,6 +583,11 @@ async fn cmd_install_service() -> Result<()> {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+fn socket_path(cfg: Option<&config::Config>) -> &str {
+    cfg.map(|c| c.daemon.socket_path.as_str())
+        .unwrap_or("/tmp/opencontrol.sock")
+}
 
 fn format_uptime(seconds: u64) -> String {
     let days = seconds / 86400;

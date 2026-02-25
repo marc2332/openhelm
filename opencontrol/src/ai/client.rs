@@ -2,6 +2,9 @@ use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+// Re-export SDK types so the rest of the crate uses one definition.
+pub use opencontrol_sdk::ToolDefinition;
+
 /// An OpenAI-compatible chat message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -69,21 +72,6 @@ pub enum Role {
     User,
     Assistant,
     Tool,
-}
-
-/// An OpenAI-compatible tool/function definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub function: FunctionDefinition,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
 }
 
 /// A tool call requested by the model.

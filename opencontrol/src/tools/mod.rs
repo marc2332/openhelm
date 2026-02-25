@@ -50,10 +50,7 @@ impl Tool for SdkToolAdapter {
     }
 
     fn definition(&self) -> ToolDefinition {
-        let sdk_def = self.0.definition();
-        // SDK ToolDefinition and ai::client::ToolDefinition have the same shape —
-        // round-trip through JSON to avoid a hard dependency between the two types.
-        serde_json::from_value(serde_json::to_value(&sdk_def).unwrap()).unwrap()
+        self.0.definition()
     }
 
     fn execute<'a>(
@@ -74,7 +71,7 @@ impl Tool for SdkToolAdapter {
 pub enum ToolGroup {
     Fs,
     /// A skill tool — carries the skill name for permission checks.
-    Skill(String),
+    Skill(&'static str),
 }
 
 // ─── SkillRegistry ────────────────────────────────────────────────────────────
@@ -95,20 +92,19 @@ impl SkillRegistry {
     }
 
     /// Build tool instances for all skills enabled in the given profile.
-    /// Returns `(Vec<Box<dyn Tool>>, Vec<(tool_name, skill_name)>)` — the second
-    /// vec lets `ToolRegistry` route tool calls back to the right group.
+    /// Returns `(Vec<Box<dyn Tool>>, HashMap<tool_name, skill_name>)`.
     pub fn build_tools_for(
         &self,
         profile: &Profile,
-    ) -> Result<(Vec<Box<dyn Tool>>, Vec<(String, String)>)> {
+    ) -> Result<(Vec<Box<dyn Tool>>, HashMap<String, &'static str>)> {
         let mut tools: Vec<Box<dyn Tool>> = vec![];
-        let mut name_map: Vec<(String, String)> = vec![];
+        let mut name_map: HashMap<String, &'static str> = HashMap::new();
 
         for skill in &self.skills {
             if let Some(skill_config) = profile.permissions.skills.get(skill.name()) {
                 let built = skill.build_tools(Some(skill_config))?;
                 for t in built {
-                    name_map.push((t.name().to_string(), skill.name().to_string()));
+                    name_map.insert(t.name().to_string(), skill.name());
                     tools.push(Box::new(SdkToolAdapter(t)));
                 }
             }
@@ -133,7 +129,7 @@ pub struct ToolRegistry {
     /// Skill tools built for this session's profile
     skill_tools: Vec<Box<dyn Tool>>,
     /// Maps tool name → skill name for group-level permission checks
-    skill_tool_map: HashMap<String, String>,
+    skill_tool_map: HashMap<String, &'static str>,
 }
 
 impl ToolRegistry {
@@ -148,7 +144,7 @@ impl ToolRegistry {
                 Box::new(fs::FsMkdirTool),
             ],
             skill_tools,
-            skill_tool_map: skill_tool_map.into_iter().collect(),
+            skill_tool_map,
         })
     }
 
@@ -169,7 +165,7 @@ impl ToolRegistry {
             return Some((t.as_ref(), ToolGroup::Fs));
         }
         if let Some(t) = self.skill_tools.iter().find(|t| t.name() == name) {
-            let skill_name = self.skill_tool_map[name].clone();
+            let skill_name = self.skill_tool_map[name];
             return Some((t.as_ref(), ToolGroup::Skill(skill_name)));
         }
         None

@@ -4,26 +4,30 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 struct Inner {
-    capacity: usize,
     lines: VecDeque<String>,
     /// Total number of lines ever pushed (never decreases).
     total: usize,
 }
 
-pub struct LogBuffer(Mutex<Inner>);
+pub struct LogBuffer {
+    capacity: usize,
+    inner: Mutex<Inner>,
+}
 
 impl LogBuffer {
     pub fn new(capacity: usize) -> Self {
-        Self(Mutex::new(Inner {
+        Self {
             capacity,
-            lines: VecDeque::with_capacity(capacity),
-            total: 0,
-        }))
+            inner: Mutex::new(Inner {
+                lines: VecDeque::with_capacity(capacity),
+                total: 0,
+            }),
+        }
     }
 
     pub fn push(&self, line: String) {
-        let mut inner = self.0.lock().unwrap();
-        if inner.lines.len() == inner.capacity {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.lines.len() == self.capacity {
             inner.lines.pop_front();
         }
         inner.lines.push_back(line);
@@ -33,7 +37,7 @@ impl LogBuffer {
     /// Return the last `n` lines and the current total count.
     /// Pass the returned total as `offset` to `since()` on the next poll.
     pub fn tail(&self, n: usize) -> (Vec<String>, usize) {
-        let inner = self.0.lock().unwrap();
+        let inner = self.inner.lock().unwrap();
         let start = inner.lines.len().saturating_sub(n);
         let lines = inner.lines.iter().skip(start).cloned().collect();
         (lines, inner.total)
@@ -43,7 +47,7 @@ impl LogBuffer {
     /// If `offset` refers to lines that have already been evicted from the
     /// ring buffer, the oldest available lines are returned instead.
     pub fn since(&self, offset: usize) -> (Vec<String>, usize) {
-        let inner = self.0.lock().unwrap();
+        let inner = self.inner.lock().unwrap();
         let total = inner.total;
         if offset >= total {
             return (vec![], total);

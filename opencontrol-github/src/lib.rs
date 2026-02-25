@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use base64::Engine as _;
 use reqwest::{Client, RequestBuilder};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -35,17 +36,17 @@ impl GithubClient {
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
     }
-}
 
-async fn github_get(client: &GithubClient, path: &str) -> Result<Value> {
-    let resp = client.get(path).send().await
-        .with_context(|| format!("GitHub API request failed: GET {}", path))?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        bail!("GitHub API returned {}: {}", status, body);
+    async fn get_json(&self, path: &str) -> Result<Value> {
+        let resp = self.get(path).send().await
+            .with_context(|| format!("GitHub API request failed: GET {}", path))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("GitHub API returned {}: {}", status, body);
+        }
+        resp.json::<Value>().await.context("Failed to parse GitHub API response")
     }
-    resp.json::<Value>().await.context("Failed to parse GitHub API response")
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -85,7 +86,7 @@ impl Tool for GithubGetRepoTool {
     fn execute<'a>(&'a self, args: &'a Value) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let repo = repo_arg(args)?;
-            let data = github_get(&self.0, &format!("/repos/{}", repo)).await?;
+            let data = self.0.get_json(&format!("/repos/{}", repo)).await?;
 
             let output = format!(
                 "Repo:          {}\nDescription:   {}\nVisibility:    {}\nDefault branch:{}\nStars:         {}\nForks:         {}\nOpen issues:   {}\nTopics:        {}\nLicense:       {}\nURL:           {}",
@@ -156,7 +157,7 @@ impl Tool for GithubListIssuesTool {
                 path.push_str(&format!("&labels={}", label));
             }
 
-            let data = github_get(&self.0, &path).await?;
+            let data = self.0.get_json(&path).await?;
             let issues = data.as_array().context("Expected array of issues")?;
 
             if issues.is_empty() {
@@ -212,9 +213,8 @@ impl Tool for GithubGetIssueTool {
             let repo = repo_arg(args)?;
             let number = args["number"].as_u64().context("Missing 'number' argument")?;
 
-            let issue = github_get(&self.0, &format!("/repos/{}/issues/{}", repo, number)).await?;
-            let comments_url = format!("/repos/{}/issues/{}/comments", repo, number);
-            let comments = github_get(&self.0, &comments_url).await?;
+            let issue = self.0.get_json(&format!("/repos/{}/issues/{}", repo, number)).await?;
+            let comments = self.0.get_json(&format!("/repos/{}/issues/{}/comments", repo, number)).await?;
 
             let mut out = format!(
                 "#{} [{}] {}\nAuthor: {}\nCreated: {}\nURL: {}\n\n{}\n",
@@ -286,7 +286,7 @@ impl Tool for GithubListPrsTool {
             let limit = args["limit"].as_u64().unwrap_or(20).min(100);
 
             let path = format!("/repos/{}/pulls?state={}&per_page={}", repo, state, limit);
-            let data = github_get(&self.0, &path).await?;
+            let data = self.0.get_json(&path).await?;
             let prs = data.as_array().context("Expected array of PRs")?;
 
             if prs.is_empty() {
@@ -343,8 +343,8 @@ impl Tool for GithubGetPrTool {
             let repo = repo_arg(args)?;
             let number = args["number"].as_u64().context("Missing 'number' argument")?;
 
-            let pr = github_get(&self.0, &format!("/repos/{}/pulls/{}", repo, number)).await?;
-            let comments = github_get(&self.0, &format!("/repos/{}/issues/{}/comments", repo, number)).await?;
+            let pr = self.0.get_json(&format!("/repos/{}/pulls/{}", repo, number)).await?;
+            let comments = self.0.get_json(&format!("/repos/{}/issues/{}/comments", repo, number)).await?;
 
             let mut out = format!(
                 "#{} [{}] {}\nAuthor:  {}\nBranch:  {} → {}\nCreated: {}\nURL:     {}\nChanges: +{} -{} in {} file(s)\n\n{}\n",
@@ -429,10 +429,9 @@ impl Tool for GithubGetFileTool {
                 api_path.push_str(&format!("?ref={}", r));
             }
 
-            let resp: ContentResponse = {
-                let raw = github_get(&self.0, &api_path).await?;
-                serde_json::from_value(raw).context("Failed to parse contents response")?
-            };
+            let raw = self.0.get_json(&api_path).await?;
+            let resp: ContentResponse =
+                serde_json::from_value(raw).context("Failed to parse contents response")?;
 
             if let Some(msg) = resp.message {
                 bail!("GitHub API error: {}", msg);
@@ -444,7 +443,9 @@ impl Tool for GithubGetFileTool {
             if encoding == "base64" {
                 // GitHub returns base64 with newlines — strip them before decoding
                 let cleaned: String = content.chars().filter(|c| *c != '\n').collect();
-                let decoded = base64_decode(&cleaned)?;
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(&cleaned)
+                    .context("Failed to decode base64 content")?;
                 let text = String::from_utf8(decoded)
                     .context("File content is not valid UTF-8 — binary file?")?;
                 Ok(ToolOutput { success: true, output: text })
@@ -453,47 +454,6 @@ impl Tool for GithubGetFileTool {
             }
         })
     }
-}
-
-/// Minimal base64 decoder — avoids adding a heavy dep to the SDK.
-fn base64_decode(input: &str) -> Result<Vec<u8>> {
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut map = [0u8; 256];
-    for (i, &b) in TABLE.iter().enumerate() {
-        map[b as usize] = i as u8;
-    }
-
-    let input = input.trim_end_matches('=');
-    let mut out = Vec::with_capacity(input.len() * 3 / 4);
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    while i + 3 < bytes.len() {
-        let b0 = map[bytes[i] as usize] as u32;
-        let b1 = map[bytes[i + 1] as usize] as u32;
-        let b2 = map[bytes[i + 2] as usize] as u32;
-        let b3 = map[bytes[i + 3] as usize] as u32;
-        let n = (b0 << 18) | (b1 << 12) | (b2 << 6) | b3;
-        out.push((n >> 16) as u8);
-        out.push((n >> 8) as u8);
-        out.push(n as u8);
-        i += 4;
-    }
-    match bytes.len() - i {
-        2 => {
-            let b0 = map[bytes[i] as usize] as u32;
-            let b1 = map[bytes[i + 1] as usize] as u32;
-            out.push(((b0 << 2) | (b1 >> 4)) as u8);
-        }
-        3 => {
-            let b0 = map[bytes[i] as usize] as u32;
-            let b1 = map[bytes[i + 1] as usize] as u32;
-            let b2 = map[bytes[i + 2] as usize] as u32;
-            out.push(((b0 << 2) | (b1 >> 4)) as u8);
-            out.push(((b1 << 4) | (b2 >> 2)) as u8);
-        }
-        _ => {}
-    }
-    Ok(out)
 }
 
 // ─── GithubSkill ──────────────────────────────────────────────────────────────
@@ -521,7 +481,7 @@ impl Skill for GithubSkill {
             Box::new(GithubGetIssueTool(client.clone())),
             Box::new(GithubListPrsTool(client.clone())),
             Box::new(GithubGetPrTool(client.clone())),
-            Box::new(GithubGetFileTool(client.clone())),
+            Box::new(GithubGetFileTool(client)),
         ])
     }
 }

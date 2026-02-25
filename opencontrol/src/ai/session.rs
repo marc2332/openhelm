@@ -1,8 +1,8 @@
 use anyhow::Result;
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
-use uuid::Uuid;
 
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
@@ -10,9 +10,7 @@ use crate::tools::{SkillRegistry, ToolContext, ToolRegistry};
 use super::client::{AiClient, ChatMessage};
 
 /// An in-memory AI conversation for a single user.
-#[allow(dead_code)]
 pub struct Session {
-    pub id: String,
     pub user_id: i64,
     pub username: String,
     pub channel: Channel,
@@ -24,7 +22,6 @@ pub struct Session {
 impl Session {
     pub fn new(user: &TelegramUser, channel: Channel, timeout_minutes: u64) -> Self {
         Self {
-            id: Uuid::new_v4().to_string(),
             user_id: user.telegram_id,
             username: user.name.clone(),
             channel,
@@ -41,7 +38,7 @@ impl Session {
     pub fn reset(&mut self) {
         self.history.clear();
         self.last_activity = std::time::Instant::now();
-        info!(session_id = %self.id, user_id = self.user_id, "Session history reset");
+        info!(user_id = self.user_id, "Session history reset");
     }
 
     pub fn touch(&mut self) {
@@ -51,7 +48,7 @@ impl Session {
 
 /// Manages all active in-memory sessions.
 pub struct SessionManager {
-    sessions: Mutex<Vec<Session>>,
+    sessions: RwLock<HashMap<i64, Session>>,
     client: AiClient,
     skills: Arc<SkillRegistry>,
     audit: AuditLogger,
@@ -66,7 +63,7 @@ impl SessionManager {
         timeout_minutes: u64,
     ) -> Self {
         Self {
-            sessions: Mutex::new(vec![]),
+            sessions: RwLock::new(HashMap::new()),
             client,
             skills,
             audit,
@@ -74,35 +71,26 @@ impl SessionManager {
         }
     }
 
-    /// Get or create a session id for a user.
-    async fn get_or_create_session_id(
-        &self,
-        user: &TelegramUser,
-        channel: Channel,
-    ) -> String {
-        let mut sessions = self.sessions.lock().await;
-
-        if let Some(s) = sessions.iter_mut().find(|s| s.user_id == user.telegram_id) {
-            if s.is_timed_out() {
-                info!(user_id = user.telegram_id, "Session timed out, resetting");
-                s.reset();
+    /// Ensure a session exists for the user, creating or resetting as needed.
+    /// Returns true if a brand-new session was created (so caller can log the event).
+    async fn ensure_session(&self, user: &TelegramUser, channel: Channel) -> bool {
+        // Fast path: session already exists and is not timed out
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(s) = sessions.get_mut(&user.telegram_id) {
+                if s.is_timed_out() {
+                    info!(user_id = user.telegram_id, "Session timed out, resetting");
+                    s.reset();
+                }
+                s.touch();
+                return false;
             }
-            s.touch();
-            return s.id.clone();
         }
 
+        // Slow path: create new session
         let session = Session::new(user, channel, self.timeout_minutes);
-        let id = session.id.clone();
-
-        self.audit.log(AuditEvent::SessionStart {
-            user_id: user.telegram_id,
-            username: user.name.clone(),
-            channel,
-            session_id: id.clone(),
-        });
-
-        sessions.push(session);
-        id
+        self.sessions.write().await.insert(user.telegram_id, session);
+        true
     }
 
     /// Send a user message and run the agentic tool loop, returning the final reply.
@@ -123,7 +111,15 @@ impl SessionManager {
         // profile config baked in, so this must happen per-message)
         let tools = ToolRegistry::for_profile(profile, &self.skills)?;
 
-        let session_id = self.get_or_create_session_id(user, channel).await;
+        let is_new = self.ensure_session(user, channel).await;
+        if is_new {
+            self.audit.log(AuditEvent::SessionStart {
+                user_id: user.telegram_id,
+                username: user.name.clone(),
+                channel,
+                session_id: user.telegram_id.to_string(),
+            });
+        }
 
         let preview = user_message.chars().take(100).collect::<String>();
         info!(
@@ -136,7 +132,7 @@ impl SessionManager {
         );
         self.audit.log(AuditEvent::MessageSent {
             user_id: user.telegram_id,
-            session_id: session_id.clone(),
+            session_id: user.telegram_id.to_string(),
             preview,
             model: model.clone(),
         });
@@ -145,28 +141,20 @@ impl SessionManager {
         let tool_context = ToolContext::from_profile(profile);
 
         // Push user message
-        {
-            let mut sessions = self.sessions.lock().await;
-            sessions
-                .iter_mut()
-                .find(|s| s.id == session_id)
-                .expect("session must exist")
-                .history
-                .push(ChatMessage::user(user_message));
-        }
+        self.sessions.write().await
+            .get_mut(&user.telegram_id)
+            .expect("session must exist")
+            .history
+            .push(ChatMessage::user(user_message));
 
         // Agentic loop
         loop {
             // Snapshot history without holding the lock
-            let history_snapshot = {
-                let sessions = self.sessions.lock().await;
-                sessions
-                    .iter()
-                    .find(|s| s.id == session_id)
-                    .expect("session must exist")
-                    .history
-                    .clone()
-            };
+            let history_snapshot = self.sessions.read().await
+                .get(&user.telegram_id)
+                .expect("session must exist")
+                .history
+                .clone();
 
             let mut messages = vec![ChatMessage::system(&system_prompt)];
             messages.extend(history_snapshot);
@@ -181,24 +169,18 @@ impl SessionManager {
 
             let assistant_msg = choice.message;
             let finish_reason = choice.finish_reason.as_deref().unwrap_or("stop");
-            let tool_calls = assistant_msg.tool_calls.clone().unwrap_or_default();
+            let tool_calls = assistant_msg.tool_calls.as_deref().unwrap_or(&[]);
 
             // Append assistant message
-            {
-                let mut sessions = self.sessions.lock().await;
-                sessions
-                    .iter_mut()
-                    .find(|s| s.id == session_id)
-                    .expect("session must exist")
-                    .history
-                    .push(assistant_msg.clone());
-            }
+            self.sessions.write().await
+                .get_mut(&user.telegram_id)
+                .expect("session must exist")
+                .history
+                .push(assistant_msg.clone());
 
             if finish_reason == "stop" || tool_calls.is_empty() {
-                let mut sessions = self.sessions.lock().await;
-                sessions
-                    .iter_mut()
-                    .find(|s| s.id == session_id)
+                self.sessions.write().await
+                    .get_mut(&user.telegram_id)
                     .expect("session must exist")
                     .touch();
                 let reply = assistant_msg.content.unwrap_or_default();
@@ -216,7 +198,7 @@ impl SessionManager {
 
             debug!(count = tool_calls.len(), "Processing tool calls");
 
-            for tc in &tool_calls {
+            for tc in tool_calls {
                 let tool_name = &tc.function.name;
                 let args: serde_json::Value =
                     serde_json::from_str(&tc.function.arguments).unwrap_or_default();
@@ -227,14 +209,14 @@ impl SessionManager {
                 let allowed = match &found {
                     Some((_, crate::tools::ToolGroup::Fs)) => profile.permissions.fs,
                     Some((_, crate::tools::ToolGroup::Skill(skill_name))) => {
-                        profile.permissions.skills.contains_key(skill_name.as_str())
+                        profile.permissions.skills.contains_key(*skill_name)
                     }
                     None => false,
                 };
 
                 self.audit.log(AuditEvent::ToolCall {
                     user_id: user.telegram_id,
-                    session_id: session_id.clone(),
+                    session_id: user.telegram_id.to_string(),
                     tool: tool_name.clone(),
                     args: args.clone(),
                     allowed,
@@ -248,12 +230,12 @@ impl SessionManager {
                         format!("Error: Tool '{}' is not enabled in your profile", tool_name)
                     }
                 } else {
-                    let tool = found.unwrap().0;
+                    let (tool, _group) = found.expect("allowed implies found");
                     match tool.execute(&args, &tool_context).await {
                         Ok(output) => {
                             self.audit.log(AuditEvent::ToolResult {
                                 user_id: user.telegram_id,
-                                session_id: session_id.clone(),
+                                session_id: user.telegram_id.to_string(),
                                 tool: tool_name.clone(),
                                 success: output.success,
                                 error: None,
@@ -264,7 +246,7 @@ impl SessionManager {
                             let err = e.to_string();
                             self.audit.log(AuditEvent::ToolResult {
                                 user_id: user.telegram_id,
-                                session_id: session_id.clone(),
+                                session_id: user.telegram_id.to_string(),
                                 tool: tool_name.clone(),
                                 success: false,
                                 error: Some(err.clone()),
@@ -274,22 +256,17 @@ impl SessionManager {
                     }
                 };
 
-                {
-                    let mut sessions = self.sessions.lock().await;
-                    sessions
-                        .iter_mut()
-                        .find(|s| s.id == session_id)
-                        .expect("session must exist")
-                        .history
-                        .push(ChatMessage::tool_result(&tc.id, result_content));
-                }
+                self.sessions.write().await
+                    .get_mut(&user.telegram_id)
+                    .expect("session must exist")
+                    .history
+                    .push(ChatMessage::tool_result(&tc.id, result_content));
             }
         }
     }
 
     pub async fn reset_session(&self, user_id: i64) {
-        let mut sessions = self.sessions.lock().await;
-        if let Some(s) = sessions.iter_mut().find(|s| s.user_id == user_id) {
+        if let Some(s) = self.sessions.write().await.get_mut(&user_id) {
             s.reset();
         }
     }
@@ -297,15 +274,14 @@ impl SessionManager {
     /// Remove sessions that have exceeded the inactivity timeout.
     /// Returns the number of sessions pruned.
     pub async fn prune_timed_out(&self) -> usize {
-        let mut sessions = self.sessions.lock().await;
+        let mut sessions = self.sessions.write().await;
         let before = sessions.len();
-        sessions.retain(|s| !s.is_timed_out());
+        sessions.retain(|_, s| !s.is_timed_out());
         before - sessions.len()
     }
 
     /// Count of currently active (non-timed-out) sessions.
     pub async fn active_count(&self) -> usize {
-        let sessions = self.sessions.lock().await;
-        sessions.iter().filter(|s| !s.is_timed_out()).count()
+        self.sessions.read().await.values().filter(|s| !s.is_timed_out()).count()
     }
 }

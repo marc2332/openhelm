@@ -86,18 +86,18 @@ impl Daemon {
         });
 
         // Session pruning — remove timed-out sessions every 60 seconds
-        {
-            let sessions_prune = sessions_arc.clone();
-            tokio::spawn(async move {
+        tokio::spawn({
+            let sessions = sessions_arc.clone();
+            async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    let pruned = sessions_prune.prune_timed_out().await;
+                    let pruned = sessions.prune_timed_out().await;
                     if pruned > 0 {
                         info!(count = pruned, "Pruned timed-out sessions");
                     }
                 }
-            });
-        }
+            }
+        });
 
         let ipc_handle = tokio::spawn(async move {
             loop {

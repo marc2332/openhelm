@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use tokio::fs;
 
-use crate::ai::client::{FunctionDefinition, ToolDefinition};
+use crate::ai::client::ToolDefinition;
 use super::{Tool, ToolContext, ToolOutput};
 
 // ─── Path validation ──────────────────────────────────────────────────────────
@@ -51,9 +51,9 @@ fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<
 
     for entry in allowed {
         // Expand ~ in the allowed path entry
-        let raw = if entry.starts_with("~/") {
+        let raw = if let Some(rest) = entry.strip_prefix("~/") {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-            PathBuf::from(format!("{}/{}", home, &entry[2..]))
+            PathBuf::from(home).join(rest)
         } else {
             PathBuf::from(entry)
         };
@@ -61,7 +61,7 @@ fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<
         // Try to canonicalize; if the directory doesn't exist yet, use the
         // path as-is (normalized). This handles write/mkdir targets that are
         // being created for the first time.
-        let canon = dunce::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
+        let canon = dunce::canonicalize(&raw).unwrap_or(raw);
 
         if path.starts_with(&canon) {
             return Ok(());
@@ -85,23 +85,20 @@ impl Tool for FsReadTool {
     fn name(&self) -> &'static str { "fs_read" }
 
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            kind: "function".to_string(),
-            function: FunctionDefinition {
-                name: self.name().to_string(),
-                description: "Read the contents of a file".to_string(),
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute or ~ relative path to the file to read"
-                        }
-                    },
-                    "required": ["path"]
-                }),
-            },
-        }
+        ToolDefinition::function(
+            self.name(),
+            "Read the contents of a file",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or ~ relative path to the file to read"
+                    }
+                },
+                "required": ["path"]
+            }),
+        )
     }
 
     fn execute<'a>(
@@ -131,27 +128,24 @@ impl Tool for FsWriteTool {
     fn name(&self) -> &'static str { "fs_write" }
 
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            kind: "function".to_string(),
-            function: FunctionDefinition {
-                name: self.name().to_string(),
-                description: "Write content to a file, creating it if it does not exist".to_string(),
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute or ~ relative path to the file to write"
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "The content to write to the file"
-                        }
+        ToolDefinition::function(
+            self.name(),
+            "Write content to a file, creating it if it does not exist",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or ~ relative path to the file to write"
                     },
-                    "required": ["path", "content"]
-                }),
-            },
-        }
+                    "content": {
+                        "type": "string",
+                        "description": "The content to write to the file"
+                    }
+                },
+                "required": ["path", "content"]
+            }),
+        )
     }
 
     fn execute<'a>(
@@ -191,23 +185,20 @@ impl Tool for FsListTool {
     fn name(&self) -> &'static str { "fs_list" }
 
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            kind: "function".to_string(),
-            function: FunctionDefinition {
-                name: self.name().to_string(),
-                description: "List the entries in a directory".to_string(),
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute or ~ relative path to the directory to list"
-                        }
-                    },
-                    "required": ["path"]
-                }),
-            },
-        }
+        ToolDefinition::function(
+            self.name(),
+            "List the entries in a directory",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or ~ relative path to the directory to list"
+                    }
+                },
+                "required": ["path"]
+            }),
+        )
     }
 
     fn execute<'a>(
@@ -258,23 +249,20 @@ impl Tool for FsMkdirTool {
     fn name(&self) -> &'static str { "fs_mkdir" }
 
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            kind: "function".to_string(),
-            function: FunctionDefinition {
-                name: self.name().to_string(),
-                description: "Create a directory (and any missing parents)".to_string(),
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute or ~ relative path of the directory to create"
-                        }
-                    },
-                    "required": ["path"]
-                }),
-            },
-        }
+        ToolDefinition::function(
+            self.name(),
+            "Create a directory (and any missing parents)",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or ~ relative path of the directory to create"
+                    }
+                },
+                "required": ["path"]
+            }),
+        )
     }
 
     fn execute<'a>(

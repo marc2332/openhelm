@@ -43,8 +43,5 @@ chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 tokio-stream = "0.1"
 
-# UUID for session IDs
-uuid = { version = "1", features = ["v4"] }
-
 # Path canonicalization helper
 dunce = "1"
