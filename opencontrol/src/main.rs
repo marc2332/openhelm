@@ -55,7 +55,32 @@ enum Command {
         #[arg(short, long)]
         profile: String,
     },
-    Init,
+    Setup {
+        #[arg(long)]
+        api_url: Option<String>,
+        #[arg(long)]
+        api_key: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        telegram_token: Option<String>,
+        #[arg(long)]
+        github_token: Option<String>,
+        #[arg(long)]
+        enable_fs: Option<bool>,
+        #[arg(long)]
+        fs_read: Option<Vec<String>>,
+        #[arg(long)]
+        fs_write: Option<Vec<String>>,
+        #[arg(long)]
+        fs_list: Option<Vec<String>>,
+        #[arg(long)]
+        fs_mkdir: Option<Vec<String>>,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        force: bool,
+    },
     InstallService,
 }
 
@@ -134,7 +159,9 @@ async fn main() -> Result<()> {
         .init();
 
     match cli.command {
-        Command::Init => cmd_init().await,
+        Command::Setup { api_url, api_key, model, telegram_token, github_token, enable_fs, fs_read, fs_write, fs_list, fs_mkdir, profile, force } => {
+            cmd_setup(api_url, api_key, model, telegram_token, github_token, enable_fs, fs_read, fs_write, fs_list, fs_mkdir, profile, force).await
+        }
         Command::Start => cmd_start(log_buf).await,
         Command::Stop => cmd_stop().await,
         Command::Status => cmd_status().await,
@@ -160,22 +187,281 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn cmd_init() -> Result<()> {
+async fn cmd_setup(
+    api_url: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+    telegram_token: Option<String>,
+    github_token: Option<String>,
+    enable_fs: Option<bool>,
+    fs_read: Option<Vec<String>>,
+    fs_write: Option<Vec<String>>,
+    fs_list: Option<Vec<String>>,
+    fs_mkdir: Option<Vec<String>>,
+    profile: Option<String>,
+    force: bool,
+) -> Result<()> {
+    use dialoguer::Input;
+    use std::collections::HashMap;
+
     let path = config::Config::path();
-    if path.exists() {
-        bail!("Config already exists at {}", path.display());
+
+    let has_cli_args = api_key.is_some();
+
+    if path.exists() && !force {
+        if has_cli_args {
+            bail!("Config already exists. Use --force to overwrite.");
+        }
+        let overwrite: bool = Input::new()
+            .with_prompt("Config already exists. Overwrite?")
+            .default(false)
+            .interact()?;
+        if !overwrite {
+            println!("Aborted.");
+            return Ok(());
+        }
     }
-    let cfg = config::Config::default();
+
+    let api_url = api_url.unwrap_or_else(|| {
+        if has_cli_args {
+            "https://openrouter.ai/api/v1".to_string()
+        } else {
+            let input: String = Input::new()
+                .with_prompt("API URL")
+                .default("https://openrouter.ai/api/v1".to_string())
+                .interact()
+                .unwrap();
+            input
+        }
+    });
+
+    let api_key = if let Some(v) = api_key {
+        v
+    } else {
+        let input: String = Input::new()
+            .with_prompt("API Key (required)")
+            .interact()?;
+        if input.is_empty() {
+            bail!("API key is required");
+        }
+        input
+    };
+
+    let model = model.unwrap_or_else(|| {
+        if has_cli_args {
+            "gpt-4o".to_string()
+        } else {
+            let input: String = Input::new()
+                .with_prompt("Model")
+                .default("gpt-4o".to_string())
+                .interact()
+                .unwrap();
+            input
+        }
+    });
+
+    let telegram_token = telegram_token.unwrap_or_else(|| {
+        if has_cli_args {
+            String::new()
+        } else {
+            let input: String = Input::new()
+                .with_prompt("Bot token (optional, press Enter to skip)")
+                .default(String::new())
+                .interact()
+                .unwrap();
+            input
+        }
+    });
+
+    let github_token = github_token.unwrap_or_else(|| {
+        if has_cli_args {
+            String::new()
+        } else {
+            let input: String = Input::new()
+                .with_prompt("GitHub token (optional, press Enter to skip)")
+                .default(String::new())
+                .interact()
+                .unwrap();
+            input
+        }
+    });
+
+    let enable_fs = enable_fs.unwrap_or_else(|| {
+        if has_cli_args {
+            false
+        } else {
+            let input: bool = Input::new()
+                .with_prompt("Enable filesystem tools?")
+                .default(false)
+                .interact()
+                .unwrap();
+            input
+        }
+    });
+
+    let fs_permissions = if enable_fs {
+        let expand_tilde = |s: String| -> String {
+            if s.starts_with("~/") {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                format!("{}{}", home, &s[1..])
+            } else {
+                s
+            }
+        };
+
+        let read = fs_read
+            .map(|v| v.into_iter().map(expand_tilde).collect())
+            .unwrap_or_else(|| {
+                if has_cli_args {
+                    vec![]
+                } else {
+                    let input: String = Input::new()
+                        .with_prompt("Read paths (comma-separated, ~/ expands)")
+                        .default(String::new())
+                        .interact()
+                        .unwrap();
+                    input
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .map(expand_tilde)
+                        .collect()
+                }
+            });
+
+        let write = fs_write
+            .map(|v| v.into_iter().map(expand_tilde).collect())
+            .unwrap_or_else(|| {
+                if has_cli_args {
+                    vec![]
+                } else {
+                    let input: String = Input::new()
+                        .with_prompt("Write paths (comma-separated)")
+                        .default(String::new())
+                        .interact()
+                        .unwrap();
+                    input
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .map(expand_tilde)
+                        .collect()
+                }
+            });
+
+        let read_dir = fs_list
+            .map(|v| v.into_iter().map(expand_tilde).collect())
+            .unwrap_or_else(|| {
+                if has_cli_args {
+                    vec![]
+                } else {
+                    let input: String = Input::new()
+                        .with_prompt("List paths (comma-separated)")
+                        .default(String::new())
+                        .interact()
+                        .unwrap();
+                    input
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .map(expand_tilde)
+                        .collect()
+                }
+            });
+
+        let mkdir = fs_mkdir
+            .map(|v| v.into_iter().map(expand_tilde).collect())
+            .unwrap_or_else(|| {
+                if has_cli_args {
+                    vec![]
+                } else {
+                    let input: String = Input::new()
+                        .with_prompt("Mkdir paths (comma-separated)")
+                        .default(String::new())
+                        .interact()
+                        .unwrap();
+                    input
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .map(expand_tilde)
+                        .collect()
+                }
+            });
+
+        config::FsPermissions {
+            read,
+            write,
+            read_dir,
+            mkdir,
+        }
+    } else {
+        config::FsPermissions::default()
+    };
+
+    let profile_name = profile.unwrap_or_else(|| {
+        if has_cli_args {
+            "default".to_string()
+        } else {
+            let input: String = Input::new()
+                .with_prompt("Profile name")
+                .default("default".to_string())
+                .interact()
+                .unwrap();
+            input
+        }
+    });
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+
+    let mut profile = config::Profile::default();
+    profile.permissions.fs = enable_fs;
+    if enable_fs {
+        profile.fs = Some(fs_permissions);
+    }
+
+    let mut skills = HashMap::new();
+    if !github_token.is_empty() {
+        let mut github_config = toml::map::Map::new();
+        github_config.insert("token".to_string(), toml::Value::String(github_token));
+        skills.insert("github".to_string(), toml::Value::Table(github_config));
+    }
+    profile.permissions.skills = skills;
+
+    let mut profiles = HashMap::new();
+    profiles.insert(profile_name, profile);
+
+    let cfg = config::Config {
+        daemon: config::DaemonConfig {
+            socket_path: "/tmp/opencontrol.sock".to_string(),
+            log_level: "info".to_string(),
+        },
+        ai: config::AiConfig {
+            api_url,
+            api_key,
+            model,
+            system_prompt: "You are a helpful assistant with access to tools on the host system. Use them carefully and only when necessary.".to_string(),
+            session_timeout_minutes: 30,
+        },
+        telegram: config::TelegramConfig {
+            bot_token: telegram_token,
+            users: vec![],
+        },
+        audit: config::AuditConfig {
+            log_path: format!("{}/.local/share/opencontrol/audit.log", home),
+        },
+        profiles,
+    };
+
     cfg.save().await?;
-    println!("Created default config at {}", path.display());
-    println!("Edit it to add your API key, Telegram bot token, and profiles.");
+    println!("\n✅ Saved config to {}", path.display());
     Ok(())
 }
 
 async fn cmd_start(log_buf: Arc<LogBuffer>) -> Result<()> {
     let cfg = config::Config::load()
         .await
-        .context("Failed to load config. Run `opencontrol init` first.")?;
+        .context("Failed to load config. Run `opencontrol setup` first.")?;
     info!("Starting daemon");
     let d = daemon::Daemon::new(cfg, log_buf).await?;
     d.run().await

@@ -118,7 +118,7 @@ impl Default for Config {
                 log_level: "info".to_string(),
             },
             ai: AiConfig {
-                api_url: "https://api.openai.com/v1".to_string(),
+                api_url: "https://openrouter.ai/api/v1".to_string(),
                 api_key: String::new(),
                 model: "gpt-4o".to_string(),
                 system_prompt: "You are a helpful assistant with access to tools on the host system. Use them carefully and only when necessary.".to_string(),

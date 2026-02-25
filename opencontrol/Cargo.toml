@@ -28,6 +28,9 @@ toml = "0.8"
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
 
+# Interactive prompts
+dialoguer = "0.11"
+
 # Logging / tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
