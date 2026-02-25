@@ -30,8 +30,5 @@ read_dir = ["/home/ricard/docs"]
 write    = []   # empty = operation disabled
 mkdir    = []
 
-[profiles.ricard.permissions.skills.github]
-token = "<GITHUB_TOKEN>"
-
 [audit]
 log_path = "/home/ricard/.local/share/opencontrol/audit.log"
