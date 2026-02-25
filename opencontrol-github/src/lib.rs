@@ -10,8 +10,6 @@ use serde_json::{json, Value};
 
 use opencontrol_sdk::{Skill, Tool, ToolDefinition, ToolOutput};
 
-// ─── GitHub HTTP client ───────────────────────────────────────────────────────
-
 #[derive(Clone)]
 struct GithubClient {
     http: Client,
@@ -49,8 +47,6 @@ impl GithubClient {
     }
 }
 
-// ─── Shared helpers ───────────────────────────────────────────────────────────
-
 fn repo_arg(args: &Value) -> Result<String> {
     let repo = args["repo"].as_str().context("Missing 'repo' argument (format: owner/repo)")?;
     if !repo.contains('/') {
@@ -58,8 +54,6 @@ fn repo_arg(args: &Value) -> Result<String> {
     }
     Ok(repo.to_string())
 }
-
-// ─── Tool: github_get_repo ────────────────────────────────────────────────────
 
 struct GithubGetRepoTool(Arc<GithubClient>);
 
@@ -108,8 +102,6 @@ impl Tool for GithubGetRepoTool {
         })
     }
 }
-
-// ─── Tool: github_list_issues ─────────────────────────────────────────────────
 
 struct GithubListIssuesTool(Arc<GithubClient>);
 
@@ -180,8 +172,6 @@ impl Tool for GithubListIssuesTool {
     }
 }
 
-// ─── Tool: github_get_issue ───────────────────────────────────────────────────
-
 struct GithubGetIssueTool(Arc<GithubClient>);
 
 impl Tool for GithubGetIssueTool {
@@ -246,8 +236,6 @@ impl Tool for GithubGetIssueTool {
     }
 }
 
-// ─── Tool: github_list_prs ────────────────────────────────────────────────────
-
 struct GithubListPrsTool(Arc<GithubClient>);
 
 impl Tool for GithubListPrsTool {
@@ -309,8 +297,6 @@ impl Tool for GithubListPrsTool {
         })
     }
 }
-
-// ─── Tool: github_get_pr ──────────────────────────────────────────────────────
 
 struct GithubGetPrTool(Arc<GithubClient>);
 
@@ -380,8 +366,6 @@ impl Tool for GithubGetPrTool {
         })
     }
 }
-
-// ─── Tool: github_get_file ────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct ContentResponse {
@@ -455,8 +439,6 @@ impl Tool for GithubGetFileTool {
         })
     }
 }
-
-// ─── GithubSkill ──────────────────────────────────────────────────────────────
 
 pub struct GithubSkill;
 

@@ -85,7 +85,6 @@ impl Daemon {
             }
         });
 
-        // Session pruning — remove timed-out sessions every 60 seconds
         tokio::spawn({
             let sessions = sessions_arc.clone();
             async move {
@@ -183,7 +182,6 @@ async fn dispatch(
         }
 
         IpcRequest::PairApprove { telegram_id, profile } => {
-            // Hard error if profile doesn't exist
             {
                 let cfg = config.read().await;
                 if let Err(e) = cfg.require_profile(&profile) {
@@ -327,13 +325,11 @@ async fn dispatch(
         }
 
         IpcRequest::Chat { message, profile } => {
-            // Validate profile exists
             let cfg_snapshot = config.read().await.clone();
             if let Err(e) = cfg_snapshot.require_profile(&profile) {
                 return IpcResponse::Error { message: e.to_string() };
             }
 
-            // Synthetic CLI user — telegram_id=0 is the reserved CLI user slot
             let cli_user = TelegramUser {
                 telegram_id: 0,
                 name: "cli".to_string(),
@@ -347,9 +343,7 @@ async fn dispatch(
         }
 
         IpcRequest::ChatReset { profile } => {
-            // Reset the synthetic CLI session for this profile.
-            // All CLI sessions use telegram_id=0; reset by user_id.
-            let _ = profile; // profile carried for future per-profile CLI sessions
+            let _ = profile;
             sessions.reset_session(0).await;
             IpcResponse::Ok { message: "CLI session reset".to_string() }
         }

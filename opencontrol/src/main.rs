@@ -18,8 +18,6 @@ use tokio::io::AsyncBufReadExt;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
-// ─── CLI definition ───────────────────────────────────────────────────────────
-
 #[derive(Parser)]
 #[command(name = "opencontrol", about = "AI-powered control service", version)]
 struct Cli {
@@ -29,88 +27,60 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run the daemon in the foreground
     Start,
-    /// Stop the daemon
     Stop,
-    /// Show daemon status
     Status,
-    /// Restart the daemon (systemd only)
     Restart,
-    /// Show recent daemon logs
     Logs {
         #[arg(short, long)]
         follow: bool,
-        /// Number of lines to show
         #[arg(short = 'n', long, default_value = "50")]
         lines: usize,
     },
-    /// Manage pairing requests
     #[command(subcommand)]
     Pair(PairCommand),
-    /// Manage paired users
     #[command(subcommand)]
     Users(UsersCommand),
-    /// List configured profiles
     #[command(subcommand)]
     Profiles(ProfilesCommand),
-    /// View the audit log
     Audit {
         #[arg(short, long)]
         follow: bool,
-        /// Filter by telegram user ID
         #[arg(long)]
         user: Option<i64>,
-        /// Number of lines to show
         #[arg(short = 'n', long, default_value = "50")]
         lines: usize,
     },
-    /// Start an interactive AI chat session via CLI
     Chat {
-        /// Profile to use (must exist in opencontrol.toml)
         #[arg(short, long)]
         profile: String,
     },
-    /// Generate the default config file
     Init,
-    /// Install the systemd user service unit
     InstallService,
 }
 
 #[derive(Subcommand)]
 enum PairCommand {
-    /// List pending pairing requests
     List,
-    /// Approve a pairing request, assigning a profile
     Approve {
         telegram_id: i64,
-        /// Profile name to assign (must exist in opencontrol.toml)
         #[arg(short, long)]
         profile: String,
     },
-    /// Reject a pairing request
     Reject { telegram_id: i64 },
 }
 
 #[derive(Subcommand)]
 enum UsersCommand {
-    /// List all paired users
     List,
-    /// Remove a paired user
     Remove { telegram_id: i64 },
 }
 
 #[derive(Subcommand)]
 enum ProfilesCommand {
-    /// List all configured profiles
     List,
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
-
-// ─── In-memory log writer ─────────────────────────────────────────────────────
-
-/// Implements `io::Write` by appending formatted lines to a `LogBuffer`.
 struct LogBufferWriter(Arc<LogBuffer>);
 
 impl std::io::Write for LogBufferWriter {
@@ -129,7 +99,6 @@ impl std::io::Write for LogBufferWriter {
     }
 }
 
-/// `MakeWriter` implementation so `tracing_subscriber::fmt` can use the buffer.
 #[derive(Clone)]
 struct MakeLogBufferWriter(Arc<LogBuffer>);
 
@@ -144,8 +113,6 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for MakeLogBufferWriter {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-
-    // Shared log buffer — 1000 lines capacity
     let log_buf = Arc::new(LogBuffer::new(1000));
 
     let env_filter = EnvFilter::from_default_env()
@@ -193,8 +160,6 @@ async fn main() -> Result<()> {
     }
 }
 
-// ─── Commands ─────────────────────────────────────────────────────────────────
-
 async fn cmd_init() -> Result<()> {
     let path = config::Config::path();
     if path.exists() {
@@ -218,8 +183,7 @@ async fn cmd_start(log_buf: Arc<LogBuffer>) -> Result<()> {
 
 async fn cmd_stop() -> Result<()> {
     let cfg = config::Config::load().await.ok();
-    let socket = socket_path(cfg.as_ref());
-    match client_call(socket, &IpcRequest::Shutdown).await {
+    match client_call(socket_path(cfg.as_ref()), &IpcRequest::Shutdown).await {
         Ok(_) => println!("Daemon stopped"),
         Err(e) => bail!("Daemon is not running: {}", e),
     }
@@ -228,9 +192,7 @@ async fn cmd_stop() -> Result<()> {
 
 async fn cmd_status() -> Result<()> {
     let cfg = config::Config::load().await.ok();
-    let socket = socket_path(cfg.as_ref());
-
-    match client_call(socket, &IpcRequest::Status).await {
+    match client_call(socket_path(cfg.as_ref()), &IpcRequest::Status).await {
         Ok(IpcResponse::Status {
             uptime_seconds,
             active_sessions,
@@ -274,8 +236,6 @@ async fn cmd_restart() -> Result<()> {
 async fn cmd_logs(follow: bool, lines: usize) -> Result<()> {
     let cfg = config::Config::load().await.ok();
     let socket = socket_path(cfg.as_ref());
-
-    // Fetch initial batch
     let total = match client_call(socket, &IpcRequest::Logs { lines, offset: 0 }).await {
         Ok(IpcResponse::Logs { lines: log_lines, total }) => {
             for line in &log_lines {
@@ -338,8 +298,6 @@ async fn cmd_pair_list() -> Result<()> {
 
 async fn cmd_pair_approve(telegram_id: i64, profile: String) -> Result<()> {
     let cfg = config::Config::load().await?;
-
-    // Hard error locally before hitting the daemon
     cfg.require_profile(&profile)?;
 
     match client_call(
@@ -490,8 +448,6 @@ fn print_audit_line(line: &str, filter_user: Option<i64>) {
 
 async fn cmd_chat(profile: String) -> Result<()> {
     let cfg = config::Config::load().await?;
-
-    // Validate profile exists locally before connecting to daemon
     cfg.require_profile(&profile)?;
 
     let socket = &cfg.daemon.socket_path;
@@ -581,8 +537,6 @@ async fn cmd_install_service() -> Result<()> {
     println!("  journalctl --user -u opencontrol.service -f");
     Ok(())
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn socket_path(cfg: Option<&config::Config>) -> &str {
     cfg.map(|c| c.daemon.socket_path.as_str())

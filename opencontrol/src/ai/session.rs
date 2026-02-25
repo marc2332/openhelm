@@ -9,7 +9,6 @@ use crate::config::{Config, TelegramUser};
 use crate::tools::{SkillRegistry, ToolContext, ToolRegistry};
 use super::client::{AiClient, ChatMessage};
 
-/// An in-memory AI conversation for a single user.
 pub struct Session {
     pub user_id: i64,
     pub username: String,
@@ -71,10 +70,7 @@ impl SessionManager {
         }
     }
 
-    /// Ensure a session exists for the user, creating or resetting as needed.
-    /// Returns true if a brand-new session was created (so caller can log the event).
     async fn ensure_session(&self, user: &TelegramUser, channel: Channel) -> bool {
-        // Fast path: session already exists and is not timed out
         {
             let mut sessions = self.sessions.write().await;
             if let Some(s) = sessions.get_mut(&user.telegram_id) {
@@ -87,14 +83,11 @@ impl SessionManager {
             }
         }
 
-        // Slow path: create new session
         let session = Session::new(user, channel, self.timeout_minutes);
         self.sessions.write().await.insert(user.telegram_id, session);
         true
     }
 
-    /// Send a user message and run the agentic tool loop, returning the final reply.
-    /// `config` is passed here (not stored) so profile changes take effect without restart.
     pub async fn send_message(
         &self,
         user: &TelegramUser,
@@ -102,13 +95,10 @@ impl SessionManager {
         user_message: &str,
         config: &Config,
     ) -> Result<String> {
-        // Resolve profile — error immediately if missing
         let profile = config.resolve_profile(&user.profile)?;
         let model = config.effective_model(user);
         let system_prompt = config.effective_system_prompt(user);
 
-        // Build a per-request tool registry (skill tools are instantiated with
-        // profile config baked in, so this must happen per-message)
         let tools = ToolRegistry::for_profile(profile, &self.skills)?;
 
         let is_new = self.ensure_session(user, channel).await;
@@ -140,16 +130,13 @@ impl SessionManager {
         let tool_defs = tools.definitions_for(profile);
         let tool_context = ToolContext::from_profile(profile);
 
-        // Push user message
         self.sessions.write().await
             .get_mut(&user.telegram_id)
             .expect("session must exist")
             .history
             .push(ChatMessage::user(user_message));
 
-        // Agentic loop
         loop {
-            // Snapshot history without holding the lock
             let history_snapshot = self.sessions.read().await
                 .get(&user.telegram_id)
                 .expect("session must exist")
@@ -171,7 +158,6 @@ impl SessionManager {
             let finish_reason = choice.finish_reason.as_deref().unwrap_or("stop");
             let tool_calls = assistant_msg.tool_calls.as_deref().unwrap_or(&[]);
 
-            // Append assistant message
             self.sessions.write().await
                 .get_mut(&user.telegram_id)
                 .expect("session must exist")
@@ -205,7 +191,6 @@ impl SessionManager {
 
                 let found = tools.find(tool_name);
 
-                // Check group-level enablement
                 let allowed = match &found {
                     Some((_, crate::tools::ToolGroup::Fs)) => profile.permissions.fs,
                     Some((_, crate::tools::ToolGroup::Skill(skill_name))) => {
@@ -271,8 +256,6 @@ impl SessionManager {
         }
     }
 
-    /// Remove sessions that have exceeded the inactivity timeout.
-    /// Returns the number of sessions pruned.
     pub async fn prune_timed_out(&self) -> usize {
         let mut sessions = self.sessions.write().await;
         let before = sessions.len();
@@ -280,7 +263,6 @@ impl SessionManager {
         before - sessions.len()
     }
 
-    /// Count of currently active (non-timed-out) sessions.
     pub async fn active_count(&self) -> usize {
         self.sessions.read().await.values().filter(|s| !s.is_timed_out()).count()
     }

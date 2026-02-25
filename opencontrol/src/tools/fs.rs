@@ -6,10 +6,6 @@ use tokio::fs;
 use crate::ai::client::ToolDefinition;
 use super::{Tool, ToolContext, ToolOutput};
 
-// ─── Path validation ──────────────────────────────────────────────────────────
-
-/// Canonicalize `raw_path`, expanding `~` to $HOME.
-/// For paths that don't exist yet (writes), canonicalizes the parent.
 fn resolve_path(raw_path: &str) -> Result<PathBuf> {
     let path = PathBuf::from(raw_path);
 
@@ -37,8 +33,6 @@ fn resolve_path(raw_path: &str) -> Result<PathBuf> {
     bail!("Invalid path: {}", path.display());
 }
 
-/// Check that `path` is under at least one entry in `allowed`.
-/// Returns a descriptive error if not.
 fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<()> {
     if allowed.is_empty() {
         bail!(
@@ -50,7 +44,6 @@ fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<
     }
 
     for entry in allowed {
-        // Expand ~ in the allowed path entry
         let raw = if let Some(rest) = entry.strip_prefix("~/") {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
             PathBuf::from(home).join(rest)
@@ -58,9 +51,6 @@ fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<
             PathBuf::from(entry)
         };
 
-        // Try to canonicalize; if the directory doesn't exist yet, use the
-        // path as-is (normalized). This handles write/mkdir targets that are
-        // being created for the first time.
         let canon = dunce::canonicalize(&raw).unwrap_or(raw);
 
         if path.starts_with(&canon) {
@@ -76,8 +66,6 @@ fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<
         allowed.join(", ")
     );
 }
-
-// ─── fs_read ──────────────────────────────────────────────────────────────────
 
 pub struct FsReadTool;
 
@@ -119,8 +107,6 @@ impl Tool for FsReadTool {
         })
     }
 }
-
-// ─── fs_write ─────────────────────────────────────────────────────────────────
 
 pub struct FsWriteTool;
 
@@ -176,8 +162,6 @@ impl Tool for FsWriteTool {
         })
     }
 }
-
-// ─── fs_list ──────────────────────────────────────────────────────────────────
 
 pub struct FsListTool;
 
@@ -240,8 +224,6 @@ impl Tool for FsListTool {
         })
     }
 }
-
-// ─── fs_mkdir ─────────────────────────────────────────────────────────────────
 
 pub struct FsMkdirTool;
 

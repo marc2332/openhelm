@@ -8,15 +8,11 @@ use crate::ai::client::ToolDefinition;
 use crate::config::{FsPermissions, Profile};
 use opencontrol_sdk::Skill;
 
-// ─── Internal Tool trait (fs tools use ToolContext; skill tools ignore it) ────
-
-/// Result of executing a tool.
 pub struct ToolOutput {
     pub success: bool,
     pub output: String,
 }
 
-/// A tool that can be invoked by the AI.
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     fn definition(&self) -> ToolDefinition;
@@ -27,7 +23,6 @@ pub trait Tool: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>>;
 }
 
-/// Contextual permissions passed to every tool call for this session.
 pub struct ToolContext {
     pub fs: FsPermissions,
 }
@@ -39,8 +34,6 @@ impl ToolContext {
         }
     }
 }
-
-// ─── Adapter: wraps an SDK Tool into the internal Tool trait ─────────────────
 
 struct SdkToolAdapter(Box<dyn opencontrol_sdk::Tool>);
 
@@ -56,7 +49,7 @@ impl Tool for SdkToolAdapter {
     fn execute<'a>(
         &'a self,
         args: &'a Value,
-        _context: &'a ToolContext, // skill tools carry all config internally
+        _context: &'a ToolContext,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let result = self.0.execute(args).await?;
@@ -65,19 +58,12 @@ impl Tool for SdkToolAdapter {
     }
 }
 
-// ─── ToolGroup ────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolGroup {
     Fs,
-    /// A skill tool — carries the skill name for permission checks.
     Skill(&'static str),
 }
 
-// ─── SkillRegistry ────────────────────────────────────────────────────────────
-
-/// Holds all registered skills. Skills are global singletons; their tools are
-/// built per-session (when the profile is known) via [`SkillRegistry::build_tools`].
 pub struct SkillRegistry {
     skills: Vec<Box<dyn Skill>>,
 }
@@ -91,8 +77,6 @@ impl SkillRegistry {
         }
     }
 
-    /// Build tool instances for all skills enabled in the given profile.
-    /// Returns `(Vec<Box<dyn Tool>>, HashMap<tool_name, skill_name>)`.
     pub fn build_tools_for(
         &self,
         profile: &Profile,
@@ -120,20 +104,13 @@ impl Default for SkillRegistry {
     }
 }
 
-// ─── ToolRegistry ─────────────────────────────────────────────────────────────
-
-/// Per-session registry that holds both fs tools (static) and skill tools
-/// (built per-profile). Create one per session via [`ToolRegistry::for_profile`].
 pub struct ToolRegistry {
     fs_tools: Vec<Box<dyn Tool>>,
-    /// Skill tools built for this session's profile
     skill_tools: Vec<Box<dyn Tool>>,
-    /// Maps tool name → skill name for group-level permission checks
     skill_tool_map: HashMap<String, &'static str>,
 }
 
 impl ToolRegistry {
-    /// Build a registry for a specific profile, instantiating skill tools.
     pub fn for_profile(profile: &Profile, skills: &SkillRegistry) -> Result<Self> {
         let (skill_tools, skill_tool_map) = skills.build_tools_for(profile)?;
         Ok(Self {
@@ -148,18 +125,15 @@ impl ToolRegistry {
         })
     }
 
-    /// Return tool definitions enabled by the given profile.
     pub fn definitions_for(&self, profile: &Profile) -> Vec<ToolDefinition> {
         let mut defs = vec![];
         if profile.permissions.fs {
             defs.extend(self.fs_tools.iter().map(|t| t.definition()));
         }
-        // Skill tools are already filtered to the profile by build_tools_for
         defs.extend(self.skill_tools.iter().map(|t| t.definition()));
         defs
     }
 
-    /// Find a tool by name and its group.
     pub fn find(&self, name: &str) -> Option<(&dyn Tool, ToolGroup)> {
         if let Some(t) = self.fs_tools.iter().find(|t| t.name() == name) {
             return Some((t.as_ref(), ToolGroup::Fs));
