@@ -5,7 +5,7 @@ use tokio::{
     net::UnixStream,
 };
 
-use crate::permissions::Permission;
+use crate::config::FsPermissions;
 
 // ─── Request / Response types ─────────────────────────────────────────────────
 
@@ -17,8 +17,8 @@ pub enum IpcRequest {
     PairList,
     PairApprove {
         telegram_id: i64,
-        permissions: Vec<Permission>,
-        fs_allowed_paths: Vec<String>,
+        /// Profile name — must exist in config or daemon returns an error
+        profile: String,
     },
     PairReject {
         telegram_id: i64,
@@ -27,6 +27,7 @@ pub enum IpcRequest {
     UserRemove {
         telegram_id: i64,
     },
+    ProfilesList,
     /// Send a message as a CLI-initiated AI session
     Chat {
         message: String,
@@ -58,6 +59,9 @@ pub enum IpcResponse {
     UsersList {
         users: Vec<UserInfo>,
     },
+    ProfilesList {
+        profiles: Vec<ProfileInfo>,
+    },
     ChatReply {
         message: String,
     },
@@ -74,58 +78,48 @@ pub struct PendingPair {
 pub struct UserInfo {
     pub telegram_id: i64,
     pub name: String,
-    pub permissions: Vec<Permission>,
-    pub fs_allowed_paths: Vec<String>,
+    pub profile: String,
 }
 
-// ─── Wire protocol helpers ────────────────────────────────────────────────────
-// Protocol: newline-delimited JSON over a Unix domain socket.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProfileInfo {
+    pub name: String,
+    pub model: Option<String>,
+    pub has_custom_prompt: bool,
+    pub fs_enabled: bool,
+    pub fs: Option<FsPermissions>,
+}
 
-/// Send a request over a UnixStream.
+// ─── Wire protocol ────────────────────────────────────────────────────────────
+
 pub async fn send_request(stream: &mut UnixStream, req: &IpcRequest) -> Result<()> {
     let mut line = serde_json::to_string(req).context("Failed to serialize IPC request")?;
     line.push('\n');
-    stream
-        .write_all(line.as_bytes())
-        .await
-        .context("Failed to write IPC request")?;
+    stream.write_all(line.as_bytes()).await.context("Failed to write IPC request")?;
     Ok(())
 }
 
-/// Read a response from a UnixStream.
 pub async fn recv_response(stream: &mut UnixStream) -> Result<IpcResponse> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .await
-        .context("Failed to read IPC response")?;
+    reader.read_line(&mut line).await.context("Failed to read IPC response")?;
     serde_json::from_str(line.trim()).context("Failed to parse IPC response")
 }
 
-/// Send a response over a UnixStream.
 pub async fn send_response(stream: &mut UnixStream, resp: &IpcResponse) -> Result<()> {
     let mut line = serde_json::to_string(resp).context("Failed to serialize IPC response")?;
     line.push('\n');
-    stream
-        .write_all(line.as_bytes())
-        .await
-        .context("Failed to write IPC response")?;
+    stream.write_all(line.as_bytes()).await.context("Failed to write IPC response")?;
     Ok(())
 }
 
-/// Read a request from a UnixStream.
 pub async fn recv_request(stream: &mut UnixStream) -> Result<IpcRequest> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .await
-        .context("Failed to read IPC request")?;
+    reader.read_line(&mut line).await.context("Failed to read IPC request")?;
     serde_json::from_str(line.trim()).context("Failed to parse IPC request")
 }
 
-/// Connect to daemon socket and send a request, then read the response.
 pub async fn client_call(socket_path: &str, req: &IpcRequest) -> Result<IpcResponse> {
     let mut stream = UnixStream::connect(socket_path)
         .await

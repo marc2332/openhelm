@@ -11,9 +11,8 @@ use crate::ai::session::SessionManager;
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
 use crate::ipc::{
-    recv_request, send_response, IpcRequest, IpcResponse, PendingPair, UserInfo,
+    recv_request, send_response, IpcRequest, IpcResponse, PendingPair, ProfileInfo, UserInfo,
 };
-use crate::permissions::Permission;
 use crate::telegram::{run_bot, BotState};
 use crate::tools::ToolRegistry;
 
@@ -36,8 +35,6 @@ impl Daemon {
             client,
             tools,
             audit.clone(),
-            &config.ai.model,
-            &config.ai.system_prompt,
             config.ai.session_timeout_minutes,
         ));
         let socket_path = config.daemon.socket_path.clone();
@@ -53,9 +50,7 @@ impl Daemon {
         })
     }
 
-    /// Run the daemon: IPC listener + Telegram bot concurrently.
     pub async fn run(self) -> Result<()> {
-        // Remove stale socket
         let _ = tokio::fs::remove_file(&self.socket_path).await;
 
         let listener = UnixListener::bind(&self.socket_path)
@@ -79,15 +74,12 @@ impl Daemon {
         let bot_connected_arc = self.bot_connected.clone();
         let start_time = self.start_time;
 
-        // Spawn Telegram bot — runs independently; if it fails or has no token,
-        // the daemon keeps running and serves IPC / CLI sessions.
         tokio::spawn(async move {
             if let Err(e) = run_bot(bot_state).await {
                 error!(error = %e, "Telegram bot error");
             }
         });
 
-        // IPC accept loop — runs until ctrl-c or Shutdown IPC command
         let ipc_handle = tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -168,11 +160,15 @@ async fn dispatch(
             IpcResponse::PairList { pending: pairs }
         }
 
-        IpcRequest::PairApprove {
-            telegram_id,
-            permissions,
-            fs_allowed_paths,
-        } => {
+        IpcRequest::PairApprove { telegram_id, profile } => {
+            // Hard error if profile doesn't exist
+            {
+                let cfg = config.read().await;
+                if let Err(e) = cfg.require_profile(&profile) {
+                    return IpcResponse::Error { message: e.to_string() };
+                }
+            }
+
             let pair_info = {
                 let pairs = pending.read().await;
                 pairs.iter().find(|p| p.telegram_id == telegram_id).cloned()
@@ -180,24 +176,19 @@ async fn dispatch(
 
             let pair = match pair_info {
                 Some(p) => p,
-                None => {
-                    return IpcResponse::Error {
-                        message: format!("No pending pairing request from {}", telegram_id),
-                    }
-                }
+                None => return IpcResponse::Error {
+                    message: format!("No pending pairing request from {}", telegram_id),
+                },
             };
 
             let new_user = TelegramUser {
                 telegram_id,
                 name: pair.username.clone(),
-                permissions: permissions.clone(),
-                fs_allowed_paths: fs_allowed_paths.clone(),
-                model: None,
+                profile: profile.clone(),
             };
 
             {
                 let mut cfg = config.write().await;
-                // Remove if already exists, then add
                 cfg.telegram.users.retain(|u| u.telegram_id != telegram_id);
                 cfg.telegram.users.push(new_user);
                 if let Err(e) = cfg.save().await {
@@ -207,7 +198,6 @@ async fn dispatch(
                 }
             }
 
-            // Remove from pending
             pending.write().await.retain(|p| p.telegram_id != telegram_id);
 
             audit.log(AuditEvent::PairingDecision {
@@ -216,13 +206,11 @@ async fn dispatch(
                 decided_by: "cli".to_string(),
             });
 
-            info!(telegram_id, username = %pair.username, "User approved");
+            info!(telegram_id, username = %pair.username, profile = %profile, "User approved");
             IpcResponse::Ok {
                 message: format!(
-                    "User {} ({}) approved with permissions: {}",
-                    pair.username,
-                    telegram_id,
-                    permissions.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+                    "User {} ({}) approved with profile '{}'",
+                    pair.username, telegram_id, profile
                 ),
             }
         }
@@ -261,8 +249,7 @@ async fn dispatch(
                 .map(|u| UserInfo {
                     telegram_id: u.telegram_id,
                     name: u.name.clone(),
-                    permissions: u.permissions.clone(),
-                    fs_allowed_paths: u.fs_allowed_paths.clone(),
+                    profile: u.profile.clone(),
                 })
                 .collect();
             IpcResponse::UsersList { users }
@@ -301,46 +288,57 @@ async fn dispatch(
             }
         }
 
+        IpcRequest::ProfilesList => {
+            let cfg = config.read().await;
+            let profiles = cfg
+                .profiles
+                .iter()
+                .map(|(name, p)| ProfileInfo {
+                    name: name.clone(),
+                    model: p.model.clone(),
+                    has_custom_prompt: p.system_prompt.is_some(),
+                    fs_enabled: p.permissions.fs,
+                    fs: p.fs.clone(),
+                })
+                .collect();
+            IpcResponse::ProfilesList { profiles }
+        }
+
         IpcRequest::Chat { message } => {
-            // CLI chat: use a synthetic "CLI user" from config, or a fixed CLI identity
+            // CLI chat uses the first configured user's profile, or errors clearly
             let cli_user = {
                 let cfg = config.read().await;
-                // Use first user as CLI actor, or create a synthetic privileged one
-                cfg.telegram.users.first().cloned().unwrap_or_else(|| TelegramUser {
-                    telegram_id: 0,
-                    name: "cli".to_string(),
-                    permissions: vec![Permission::Fs],
-                    fs_allowed_paths: vec![
-                        std::env::var("HOME").unwrap_or_else(|_| "/root".to_string())
-                    ],
-                    model: None,
-                })
+                cfg.telegram.users.first().cloned()
             };
 
-            match sessions.send_message(&cli_user, Channel::Cli, &message).await {
+            let cli_user = match cli_user {
+                Some(u) => u,
+                None => return IpcResponse::Error {
+                    message: "No paired users configured. CLI chat requires at least one user \
+                        with a valid profile. Add a [profiles.*] section and pair a user."
+                        .to_string(),
+                },
+            };
+
+            let cfg_snapshot = config.read().await.clone();
+            match sessions.send_message(&cli_user, Channel::Cli, &message, &cfg_snapshot).await {
                 Ok(reply) => IpcResponse::ChatReply { message: reply },
                 Err(e) => IpcResponse::Error { message: e.to_string() },
             }
         }
 
         IpcRequest::ChatReset => {
-            // Reset CLI session (user_id 0)
             sessions.reset_session(0).await;
-            IpcResponse::Ok {
-                message: "CLI session reset".to_string(),
-            }
+            IpcResponse::Ok { message: "CLI session reset".to_string() }
         }
 
         IpcRequest::Shutdown => {
             info!("Shutdown requested via IPC");
-            // Spawn a task to exit after replying
             tokio::spawn(async {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 std::process::exit(0);
             });
-            IpcResponse::Ok {
-                message: "Daemon shutting down".to_string(),
-            }
+            IpcResponse::Ok { message: "Daemon shutting down".to_string() }
         }
     }
 }

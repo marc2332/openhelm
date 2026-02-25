@@ -4,15 +4,15 @@ use std::path::PathBuf;
 use tokio::fs;
 
 use crate::ai::client::{FunctionDefinition, ToolDefinition};
-use crate::permissions::Permission;
 use super::{Tool, ToolContext, ToolOutput};
 
-/// Resolve and validate that `raw_path` is inside one of `allowed_paths`.
-/// Returns the canonicalized absolute path if allowed.
-fn validate_path(raw_path: &str, allowed_paths: &[String]) -> Result<PathBuf> {
+// ─── Path validation ──────────────────────────────────────────────────────────
+
+/// Canonicalize `raw_path`, expanding `~` to $HOME.
+/// For paths that don't exist yet (writes), canonicalizes the parent.
+fn resolve_path(raw_path: &str) -> Result<PathBuf> {
     let path = PathBuf::from(raw_path);
 
-    // Expand ~ as home directory
     let path = if let Ok(stripped) = path.strip_prefix("~") {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
         PathBuf::from(home).join(stripped)
@@ -20,62 +20,76 @@ fn validate_path(raw_path: &str, allowed_paths: &[String]) -> Result<PathBuf> {
         path
     };
 
-    // We canonicalize the parent dir (file might not exist yet for writes)
-    let canonical = if path.exists() {
-        dunce::canonicalize(&path).with_context(|| format!("Failed to resolve path: {}", path.display()))?
-    } else if let Some(parent) = path.parent() {
+    if path.exists() {
+        return dunce::canonicalize(&path)
+            .with_context(|| format!("Failed to resolve path: {}", path.display()));
+    }
+
+    if let Some(parent) = path.parent() {
         if parent.as_os_str().is_empty() {
             bail!("Cannot resolve relative path: {}", path.display());
         }
-        let canonical_parent = dunce::canonicalize(parent)
+        let canon_parent = dunce::canonicalize(parent)
             .with_context(|| format!("Parent directory does not exist: {}", parent.display()))?;
-        canonical_parent.join(path.file_name().unwrap_or_default())
-    } else {
-        bail!("Invalid path: {}", path.display());
-    };
-
-    // Check against all allowed paths
-    for allowed in allowed_paths {
-        let allowed_path = PathBuf::from(allowed);
-        let allowed_canonical = match dunce::canonicalize(&allowed_path) {
-            Ok(p) => p,
-            Err(_) => continue, // Skip non-existent allowed paths
-        };
-        if canonical.starts_with(&allowed_canonical) {
-            return Ok(canonical);
-        }
+        return Ok(canon_parent.join(path.file_name().unwrap_or_default()));
     }
 
-    if allowed_paths.is_empty() {
+    bail!("Invalid path: {}", path.display());
+}
+
+/// Check that `path` is under at least one entry in `allowed`.
+/// Returns a descriptive error if not.
+fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<()> {
+    if allowed.is_empty() {
         bail!(
-            "Access denied: no allowed paths are configured for this user. \
-            An administrator must set fs_allowed_paths in opencontrol.toml or re-approve with \
-            `opencontrol pair approve <id> --allowed-paths /some/path`"
+            "Operation '{}' is not permitted: no paths are configured for this operation in the profile. \
+            Add paths under [profiles.<name>.fs].{} in opencontrol.toml",
+            operation,
+            operation
         );
     }
 
+    for entry in allowed {
+        // Expand ~ in the allowed path entry
+        let raw = if entry.starts_with("~/") {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+            PathBuf::from(format!("{}/{}", home, &entry[2..]))
+        } else {
+            PathBuf::from(entry)
+        };
+
+        // Try to canonicalize; if the directory doesn't exist yet, use the
+        // path as-is (normalized). This handles write/mkdir targets that are
+        // being created for the first time.
+        let canon = dunce::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
+
+        if path.starts_with(&canon) {
+            return Ok(());
+        }
+    }
+
     bail!(
-        "Access denied: '{}' is not within any allowed path. Allowed: {}",
-        canonical.display(),
-        allowed_paths.join(", ")
+        "Operation '{}' denied: '{}' is not within any allowed path.\nAllowed for {}: {}",
+        operation,
+        path.display(),
+        operation,
+        allowed.join(", ")
     );
 }
 
-// ─── fs_read ─────────────────────────────────────────────────────────────────
+// ─── fs_read ──────────────────────────────────────────────────────────────────
 
 pub struct FsReadTool;
 
 impl Tool for FsReadTool {
     fn name(&self) -> &'static str { "fs_read" }
-    fn description(&self) -> &'static str { "Read the contents of a file" }
-    fn required_permission(&self) -> Permission { Permission::Fs }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             kind: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: self.description().to_string(),
+                description: "Read the contents of a file".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -96,39 +110,32 @@ impl Tool for FsReadTool {
         context: &'a ToolContext,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
-            let path_str = args["path"]
-                .as_str()
-                .context("Missing or invalid 'path' argument")?;
-
-            let path = validate_path(path_str, &context.allowed_paths)?;
+            let path_str = args["path"].as_str().context("Missing 'path' argument")?;
+            let path = resolve_path(path_str)?;
+            check_allowed(&path, &context.fs.read, "read")?;
 
             let contents = fs::read_to_string(&path)
                 .await
                 .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-            Ok(ToolOutput {
-                success: true,
-                output: contents,
-            })
+            Ok(ToolOutput { success: true, output: contents })
         })
     }
 }
 
-// ─── fs_write ────────────────────────────────────────────────────────────────
+// ─── fs_write ─────────────────────────────────────────────────────────────────
 
 pub struct FsWriteTool;
 
 impl Tool for FsWriteTool {
     fn name(&self) -> &'static str { "fs_write" }
-    fn description(&self) -> &'static str { "Write content to a file, creating it if it does not exist" }
-    fn required_permission(&self) -> Permission { Permission::Fs }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             kind: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: self.description().to_string(),
+                description: "Write content to a file, creating it if it does not exist".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -153,20 +160,15 @@ impl Tool for FsWriteTool {
         context: &'a ToolContext,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
-            let path_str = args["path"]
-                .as_str()
-                .context("Missing or invalid 'path' argument")?;
-            let content = args["content"]
-                .as_str()
-                .context("Missing or invalid 'content' argument")?;
+            let path_str = args["path"].as_str().context("Missing 'path' argument")?;
+            let content = args["content"].as_str().context("Missing 'content' argument")?;
+            let path = resolve_path(path_str)?;
+            check_allowed(&path, &context.fs.write, "write")?;
 
-            let path = validate_path(path_str, &context.allowed_paths)?;
-
-            // Ensure parent directory exists
             if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)
-                    .await
-                    .with_context(|| format!("Failed to create parent directory: {}", parent.display()))?;
+                fs::create_dir_all(parent).await.with_context(|| {
+                    format!("Failed to create parent directory: {}", parent.display())
+                })?;
             }
 
             fs::write(&path, content)
@@ -181,21 +183,19 @@ impl Tool for FsWriteTool {
     }
 }
 
-// ─── fs_list ─────────────────────────────────────────────────────────────────
+// ─── fs_list ──────────────────────────────────────────────────────────────────
 
 pub struct FsListTool;
 
 impl Tool for FsListTool {
     fn name(&self) -> &'static str { "fs_list" }
-    fn description(&self) -> &'static str { "List the entries in a directory" }
-    fn required_permission(&self) -> Permission { Permission::Fs }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             kind: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: self.description().to_string(),
+                description: "List the entries in a directory".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -216,11 +216,9 @@ impl Tool for FsListTool {
         context: &'a ToolContext,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
-            let path_str = args["path"]
-                .as_str()
-                .context("Missing or invalid 'path' argument")?;
-
-            let path = validate_path(path_str, &context.allowed_paths)?;
+            let path_str = args["path"].as_str().context("Missing 'path' argument")?;
+            let path = resolve_path(path_str)?;
+            check_allowed(&path, &context.fs.read_dir, "read_dir")?;
 
             let mut entries = fs::read_dir(&path)
                 .await
@@ -247,6 +245,55 @@ impl Tool for FsListTool {
                 } else {
                     lines.join("\n")
                 },
+            })
+        })
+    }
+}
+
+// ─── fs_mkdir ─────────────────────────────────────────────────────────────────
+
+pub struct FsMkdirTool;
+
+impl Tool for FsMkdirTool {
+    fn name(&self) -> &'static str { "fs_mkdir" }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            kind: "function".to_string(),
+            function: FunctionDefinition {
+                name: self.name().to_string(),
+                description: "Create a directory (and any missing parents)".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute or ~ relative path of the directory to create"
+                        }
+                    },
+                    "required": ["path"]
+                }),
+            },
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        args: &'a Value,
+        context: &'a ToolContext,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
+        Box::pin(async move {
+            let path_str = args["path"].as_str().context("Missing 'path' argument")?;
+            let path = resolve_path(path_str)?;
+            check_allowed(&path, &context.fs.mkdir, "mkdir")?;
+
+            fs::create_dir_all(&path)
+                .await
+                .with_context(|| format!("Failed to create directory: {}", path.display()))?;
+
+            Ok(ToolOutput {
+                success: true,
+                output: format!("Created directory {}", path.display()),
             })
         })
     }

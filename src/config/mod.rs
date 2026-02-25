@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-
-use crate::permissions::Permission;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -11,6 +10,8 @@ pub struct Config {
     pub ai: AiConfig,
     pub telegram: TelegramConfig,
     pub audit: AuditConfig,
+    #[serde(default)]
+    pub profiles: HashMap<String, Profile>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -40,18 +41,68 @@ pub struct TelegramConfig {
 pub struct TelegramUser {
     pub telegram_id: i64,
     pub name: String,
-    #[serde(default)]
-    pub permissions: Vec<Permission>,
-    #[serde(default)]
-    pub fs_allowed_paths: Vec<String>,
-    /// Optional per-user model override
-    pub model: Option<String>,
+    /// Name of the profile assigned to this user (must exist in [profiles])
+    pub profile: String,
 }
+
+// ─── Profile ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct Profile {
+    /// Optional system prompt override; falls back to [ai].system_prompt
+    pub system_prompt: Option<String>,
+    /// Optional model override; falls back to [ai].model
+    pub model: Option<String>,
+    #[serde(default)]
+    pub permissions: ProfilePermissions,
+    /// Filesystem path allowlists; required when permissions.fs = true
+    pub fs: Option<FsPermissions>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ProfilePermissions {
+    /// Enable the filesystem tool group
+    #[serde(default)]
+    pub fs: bool,
+}
+
+/// Per-operation filesystem path allowlists.
+/// An empty list for an operation means that operation is completely disabled.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct FsPermissions {
+    /// Paths the AI may read files from
+    #[serde(default)]
+    pub read: Vec<String>,
+    /// Paths the AI may list directory entries under
+    #[serde(default)]
+    pub read_dir: Vec<String>,
+    /// Paths the AI may write or overwrite files in
+    #[serde(default)]
+    pub write: Vec<String>,
+    /// Paths the AI may create directories under
+    #[serde(default)]
+    pub mkdir: Vec<String>,
+}
+
+impl FsPermissions {
+    /// Returns true if at least one operation has at least one allowed path.
+    #[allow(dead_code)]
+    pub fn has_any_paths(&self) -> bool {
+        !self.read.is_empty()
+            || !self.read_dir.is_empty()
+            || !self.write.is_empty()
+            || !self.mkdir.is_empty()
+    }
+}
+
+// ─── AuditConfig ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuditConfig {
     pub log_path: String,
 }
+
+// ─── Defaults ─────────────────────────────────────────────────────────────────
 
 impl Default for Config {
     fn default() -> Self {
@@ -75,9 +126,12 @@ impl Default for Config {
             audit: AuditConfig {
                 log_path: format!("{}/.local/share/opencontrol/audit.log", home),
             },
+            profiles: HashMap::new(),
         }
     }
 }
+
+// ─── Config methods ───────────────────────────────────────────────────────────
 
 impl Config {
     pub fn path() -> PathBuf {
@@ -115,14 +169,46 @@ impl Config {
         Ok(())
     }
 
-    /// Find a user by telegram_id
+    /// Find a user by telegram_id.
     pub fn find_user(&self, telegram_id: i64) -> Option<&TelegramUser> {
         self.telegram.users.iter().find(|u| u.telegram_id == telegram_id)
     }
 
-    /// Find a user mutably by telegram_id
-    #[allow(dead_code)]
-    pub fn find_user_mut(&mut self, telegram_id: i64) -> Option<&mut TelegramUser> {
-        self.telegram.users.iter_mut().find(|u| u.telegram_id == telegram_id)
+    /// Resolve a profile by name, returning a clear error if it doesn't exist.
+    pub fn resolve_profile<'a>(&'a self, name: &str) -> Result<&'a Profile> {
+        self.profiles.get(name).ok_or_else(|| {
+            let defined = if self.profiles.is_empty() {
+                "(none defined)".to_string()
+            } else {
+                self.profiles.keys().cloned().collect::<Vec<_>>().join(", ")
+            };
+            anyhow::anyhow!(
+                "Profile '{}' not found. Defined profiles: {}",
+                name,
+                defined
+            )
+        })
     }
+
+    /// Validate that a profile name exists. Hard error if not.
+    pub fn require_profile(&self, name: &str) -> Result<()> {
+        self.resolve_profile(name).map(|_| ())
+    }
+
+    /// Resolve the effective model for a user (profile → global fallback).
+    pub fn effective_model(&self, user: &TelegramUser) -> String {
+        self.profiles
+            .get(&user.profile)
+            .and_then(|p| p.model.clone())
+            .unwrap_or_else(|| self.ai.model.clone())
+    }
+
+    /// Resolve the effective system prompt for a user (profile → global fallback).
+    pub fn effective_system_prompt(&self, user: &TelegramUser) -> String {
+        self.profiles
+            .get(&user.profile)
+            .and_then(|p| p.system_prompt.clone())
+            .unwrap_or_else(|| self.ai.system_prompt.clone())
+    }
+
 }

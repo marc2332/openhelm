@@ -15,7 +15,6 @@ use crate::ai::session::SessionManager;
 use crate::config::Config;
 use crate::ipc::PendingPair;
 
-/// Shared daemon state accessible from Telegram handlers.
 #[derive(Clone)]
 pub struct BotState {
     pub config: Arc<RwLock<Config>>,
@@ -27,7 +26,6 @@ pub struct BotState {
     pub start_time: std::time::Instant,
 }
 
-/// Commands the bot understands.
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 enum BotCommand {
@@ -37,11 +35,10 @@ enum BotCommand {
     Help,
     #[command(description = "Reset your conversation history")]
     Reset,
-    #[command(description = "Show your current permissions")]
-    Permissions,
+    #[command(description = "Show your profile and permissions")]
+    Profile,
 }
 
-/// Start the Telegram bot and run until cancelled.
 pub async fn run_bot(state: BotState) -> Result<()> {
     let token = state.config.read().await.telegram.bot_token.clone();
     if token.is_empty() {
@@ -51,8 +48,6 @@ pub async fn run_bot(state: BotState) -> Result<()> {
 
     let bot = Bot::new(token);
 
-    // Validate the token before starting the dispatcher — a bad token causes
-    // the dispatcher to panic, so we catch it here gracefully.
     match bot.get_me().await {
         Ok(me) => {
             info!(username = %me.username(), "Telegram bot connected");
@@ -82,7 +77,6 @@ pub async fn run_bot(state: BotState) -> Result<()> {
     Ok(())
 }
 
-/// Handle slash commands.
 async fn command_handler(
     bot: Bot,
     msg: Message,
@@ -104,11 +98,10 @@ async fn command_handler(
                     msg.chat.id,
                     "Welcome back! Send me a message and I'll help you.\n\
                     /reset — clear conversation history\n\
-                    /permissions — show your permissions",
+                    /profile — show your profile and permissions",
                 )
                 .await?;
             } else {
-                // Not yet paired — log pairing request
                 let already_pending = state
                     .pending_pairs
                     .read()
@@ -150,21 +143,56 @@ async fn command_handler(
             bot.send_message(msg.chat.id, "Conversation history cleared.").await?;
         }
 
-        BotCommand::Permissions => {
+        BotCommand::Profile => {
             let config = state.config.read().await;
             if let Some(user) = config.find_user(user_id) {
-                let perms: Vec<String> = user.permissions.iter().map(|p| p.to_string()).collect();
-                let paths = user.fs_allowed_paths.join("\n  ");
-                let text = if perms.is_empty() {
-                    "You have no permissions assigned.".to_string()
-                } else {
-                    format!(
-                        "Your permissions:\n{}\n\nAllowed paths:\n  {}",
-                        perms.iter().map(|p| format!("• {}", p)).collect::<Vec<_>>().join("\n"),
-                        if paths.is_empty() { "(none)".to_string() } else { paths }
-                    )
-                };
-                bot.send_message(msg.chat.id, text).await?;
+                let profile_name = &user.profile;
+                match config.resolve_profile(profile_name) {
+                    Ok(profile) => {
+                        let model = config.effective_model(user);
+                        let mut lines = vec![
+                            format!("Profile: {}", profile_name),
+                            format!("Model:   {}", model),
+                        ];
+
+                        if profile.system_prompt.is_some() {
+                            lines.push("System prompt: custom".to_string());
+                        }
+
+                        lines.push(String::new());
+                        lines.push("Permissions:".to_string());
+
+                        if profile.permissions.fs {
+                            lines.push("  • fs (filesystem)".to_string());
+                            if let Some(fs) = &profile.fs {
+                                let fmt_paths = |paths: &Vec<String>| {
+                                    if paths.is_empty() {
+                                        "    (none)".to_string()
+                                    } else {
+                                        paths.iter().map(|p| format!("    - {}", p)).collect::<Vec<_>>().join("\n")
+                                    }
+                                };
+                                lines.push(format!("    read:\n{}", fmt_paths(&fs.read)));
+                                lines.push(format!("    read_dir:\n{}", fmt_paths(&fs.read_dir)));
+                                lines.push(format!("    write:\n{}", fmt_paths(&fs.write)));
+                                lines.push(format!("    mkdir:\n{}", fmt_paths(&fs.mkdir)));
+                            } else {
+                                lines.push("    (no paths configured — all operations denied)".to_string());
+                            }
+                        } else {
+                            lines.push("  (none)".to_string());
+                        }
+
+                        bot.send_message(msg.chat.id, lines.join("\n")).await?;
+                    }
+                    Err(e) => {
+                        bot.send_message(
+                            msg.chat.id,
+                            format!("Profile error: {}", e),
+                        )
+                        .await?;
+                    }
+                }
             } else {
                 bot.send_message(msg.chat.id, "You are not paired yet.").await?;
             }
@@ -174,7 +202,6 @@ async fn command_handler(
     Ok(())
 }
 
-/// Handle plain text messages.
 async fn message_handler(
     bot: Bot,
     msg: Message,
@@ -186,9 +213,10 @@ async fn message_handler(
         None => return Ok(()),
     };
 
-    let user = {
+    let (user, config_snapshot) = {
         let config = state.config.read().await;
-        config.find_user(user_id).cloned()
+        let user = config.find_user(user_id).cloned();
+        (user, config.clone())
     };
 
     let user = match user {
@@ -203,35 +231,27 @@ async fn message_handler(
         }
     };
 
-    // Show typing indicator
-    bot.send_chat_action(msg.chat.id, ChatAction::Typing)
-        .await?;
+    bot.send_chat_action(msg.chat.id, ChatAction::Typing).await?;
 
     match state
         .sessions
-        .send_message(&user, Channel::Telegram, &text)
+        .send_message(&user, Channel::Telegram, &text, &config_snapshot)
         .await
     {
         Ok(reply) => {
-            // Send reply, splitting if over Telegram's 4096 char limit
             for chunk in split_message(&reply, 4096) {
                 bot.send_message(msg.chat.id, chunk).await?;
             }
         }
         Err(e) => {
             error!(error = %e, user_id = user_id, "AI session error");
-            bot.send_message(
-                msg.chat.id,
-                format!("An error occurred: {}", e),
-            )
-            .await?;
+            bot.send_message(msg.chat.id, format!("Error: {}", e)).await?;
         }
     }
 
     Ok(())
 }
 
-/// Split a long message into chunks that fit within Telegram's limit.
 fn split_message(text: &str, limit: usize) -> Vec<&str> {
     if text.len() <= limit {
         return vec![text];
@@ -240,7 +260,6 @@ fn split_message(text: &str, limit: usize) -> Vec<&str> {
     let mut start = 0;
     while start < text.len() {
         let end = (start + limit).min(text.len());
-        // Try to break at a newline
         let slice = &text[start..end];
         let break_at = slice.rfind('\n').map(|i| i + 1).unwrap_or(slice.len());
         chunks.push(&text[start..start + break_at]);
