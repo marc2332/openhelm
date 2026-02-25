@@ -25,10 +25,10 @@ system_prompt = "You are a coding assistant. Help with code, files, and projects
 fs = true
 
 [profiles.ricard.fs]
-read     = ["/home/ricard/docs"]
+read = ["/home/ricard/docs"]
 read_dir = ["/home/ricard/docs"]
-write    = []   # empty = operation disabled
-mkdir    = []
+write = []                       # empty = operation disabled
+mkdir = []
 
 [audit]
 log_path = "/home/ricard/.local/share/opencontrol/audit.log"

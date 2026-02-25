@@ -1,7 +1,3 @@
 [workspace]
-members = [
-    "opencontrol",
-    "opencontrol-sdk",
-    "opencontrol-github",
-]
+members = ["opencontrol", "opencontrol-sdk", "opencontrol-github"]
 resolver = "2"

@@ -2,16 +2,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::Utc;
-use teloxide::{
-    prelude::*,
-    types::ChatAction,
-    utils::command::BotCommands,
-};
+use teloxide::{prelude::*, types::ChatAction, utils::command::BotCommands};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::ai::session::SessionManager;
+use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::Config;
 use crate::ipc::PendingPair;
 
@@ -51,7 +47,9 @@ pub async fn run_bot(state: BotState) -> Result<()> {
     match bot.get_me().await {
         Ok(me) => {
             info!(username = %me.username(), "Telegram bot connected");
-            state.bot_connected.store(true, std::sync::atomic::Ordering::Relaxed);
+            state
+                .bot_connected
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         Err(e) => {
             warn!(error = %e, "Telegram bot token invalid or unreachable — bot will not start");
@@ -135,12 +133,14 @@ async fn command_handler(
         BotCommand::Reset => {
             let config = state.config.read().await;
             if config.find_user(user_id).is_none() {
-                bot.send_message(msg.chat.id, "You are not paired yet.").await?;
+                bot.send_message(msg.chat.id, "You are not paired yet.")
+                    .await?;
                 return Ok(());
             }
             drop(config);
             state.sessions.reset_session(user_id).await;
-            bot.send_message(msg.chat.id, "Conversation history cleared.").await?;
+            bot.send_message(msg.chat.id, "Conversation history cleared.")
+                .await?;
         }
 
         BotCommand::Profile => {
@@ -169,7 +169,11 @@ async fn command_handler(
                                     if paths.is_empty() {
                                         "    (none)".to_string()
                                     } else {
-                                        paths.iter().map(|p| format!("    - {}", p)).collect::<Vec<_>>().join("\n")
+                                        paths
+                                            .iter()
+                                            .map(|p| format!("    - {}", p))
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
                                     }
                                 };
                                 lines.push(format!("    read:\n{}", fmt_paths(&fs.read)));
@@ -177,7 +181,9 @@ async fn command_handler(
                                 lines.push(format!("    write:\n{}", fmt_paths(&fs.write)));
                                 lines.push(format!("    mkdir:\n{}", fmt_paths(&fs.mkdir)));
                             } else {
-                                lines.push("    (no paths configured — all operations denied)".to_string());
+                                lines.push(
+                                    "    (no paths configured — all operations denied)".to_string(),
+                                );
                             }
                         } else {
                             lines.push("  (none)".to_string());
@@ -186,15 +192,13 @@ async fn command_handler(
                         bot.send_message(msg.chat.id, lines.join("\n")).await?;
                     }
                     Err(e) => {
-                        bot.send_message(
-                            msg.chat.id,
-                            format!("Profile error: {}", e),
-                        )
-                        .await?;
+                        bot.send_message(msg.chat.id, format!("Profile error: {}", e))
+                            .await?;
                     }
                 }
             } else {
-                bot.send_message(msg.chat.id, "You are not paired yet.").await?;
+                bot.send_message(msg.chat.id, "You are not paired yet.")
+                    .await?;
             }
         }
     }
@@ -231,7 +235,8 @@ async fn message_handler(
         }
     };
 
-    bot.send_chat_action(msg.chat.id, ChatAction::Typing).await?;
+    bot.send_chat_action(msg.chat.id, ChatAction::Typing)
+        .await?;
 
     match state
         .sessions
@@ -245,7 +250,8 @@ async fn message_handler(
         }
         Err(e) => {
             error!(error = %e, user_id = user_id, "AI session error");
-            bot.send_message(msg.chat.id, format!("Error: {}", e)).await?;
+            bot.send_message(msg.chat.id, format!("Error: {}", e))
+                .await?;
         }
     }
 

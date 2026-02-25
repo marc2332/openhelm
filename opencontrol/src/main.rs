@@ -92,7 +92,9 @@ enum PairCommand {
         #[arg(short, long)]
         profile: String,
     },
-    Reject { telegram_id: i64 },
+    Reject {
+        telegram_id: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -140,8 +142,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let log_buf = Arc::new(LogBuffer::new(1000));
 
-    let env_filter = EnvFilter::from_default_env()
-        .add_directive("opencontrol=info".parse().unwrap());
+    let env_filter =
+        EnvFilter::from_default_env().add_directive("opencontrol=info".parse().unwrap());
 
     tracing_subscriber::registry()
         .with(
@@ -159,8 +161,35 @@ async fn main() -> Result<()> {
         .init();
 
     match cli.command {
-        Command::Setup { api_url, api_key, model, telegram_token, github_token, enable_fs, fs_read, fs_write, fs_list, fs_mkdir, profile, force } => {
-            cmd_setup(api_url, api_key, model, telegram_token, github_token, enable_fs, fs_read, fs_write, fs_list, fs_mkdir, profile, force).await
+        Command::Setup {
+            api_url,
+            api_key,
+            model,
+            telegram_token,
+            github_token,
+            enable_fs,
+            fs_read,
+            fs_write,
+            fs_list,
+            fs_mkdir,
+            profile,
+            force,
+        } => {
+            cmd_setup(
+                api_url,
+                api_key,
+                model,
+                telegram_token,
+                github_token,
+                enable_fs,
+                fs_read,
+                fs_write,
+                fs_list,
+                fs_mkdir,
+                profile,
+                force,
+            )
+            .await
         }
         Command::Start => cmd_start(log_buf).await,
         Command::Stop => cmd_stop().await,
@@ -169,9 +198,10 @@ async fn main() -> Result<()> {
         Command::Logs { follow, lines } => cmd_logs(follow, lines).await,
         Command::Pair(sub) => match sub {
             PairCommand::List => cmd_pair_list().await,
-            PairCommand::Approve { telegram_id, profile } => {
-                cmd_pair_approve(telegram_id, profile).await
-            }
+            PairCommand::Approve {
+                telegram_id,
+                profile,
+            } => cmd_pair_approve(telegram_id, profile).await,
             PairCommand::Reject { telegram_id } => cmd_pair_reject(telegram_id).await,
         },
         Command::Users(sub) => match sub {
@@ -181,7 +211,11 @@ async fn main() -> Result<()> {
         Command::Profiles(sub) => match sub {
             ProfilesCommand::List => cmd_profiles_list().await,
         },
-        Command::Audit { follow, user, lines } => cmd_audit(follow, user, lines).await,
+        Command::Audit {
+            follow,
+            user,
+            lines,
+        } => cmd_audit(follow, user, lines).await,
         Command::Chat { profile } => cmd_chat(profile).await,
         Command::InstallService => cmd_install_service().await,
     }
@@ -238,9 +272,7 @@ async fn cmd_setup(
     let api_key = if let Some(v) = api_key {
         v
     } else {
-        let input: String = Input::new()
-            .with_prompt("API Key (required)")
-            .interact()?;
+        let input: String = Input::new().with_prompt("API Key (required)").interact()?;
         if input.is_empty() {
             bail!("API key is required");
         }
@@ -493,7 +525,11 @@ async fn cmd_status() -> Result<()> {
             println!("Pending pairs:    {}", pending_pairs);
             println!(
                 "Telegram:         {}",
-                if telegram_connected { "connected" } else { "not configured" }
+                if telegram_connected {
+                    "connected"
+                } else {
+                    "not configured"
+                }
             );
         }
         Ok(_) => bail!("Unexpected response from daemon"),
@@ -523,7 +559,10 @@ async fn cmd_logs(follow: bool, lines: usize) -> Result<()> {
     let cfg = config::Config::load().await.ok();
     let socket = socket_path(cfg.as_ref());
     let total = match client_call(socket, &IpcRequest::Logs { lines, offset: 0 }).await {
-        Ok(IpcResponse::Logs { lines: log_lines, total }) => {
+        Ok(IpcResponse::Logs {
+            lines: log_lines,
+            total,
+        }) => {
             for line in &log_lines {
                 println!("{}", line);
             }
@@ -531,7 +570,9 @@ async fn cmd_logs(follow: bool, lines: usize) -> Result<()> {
         }
         Err(e) => {
             eprintln!("Daemon is not running: {}", e);
-            eprintln!("Hint: if running under systemd try: journalctl --user -u opencontrol.service -f");
+            eprintln!(
+                "Hint: if running under systemd try: journalctl --user -u opencontrol.service -f"
+            );
             return Ok(());
         }
         Ok(_) => bail!("Unexpected response from daemon"),
@@ -542,7 +583,10 @@ async fn cmd_logs(follow: bool, lines: usize) -> Result<()> {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             match client_call(socket, &IpcRequest::Logs { lines: 0, offset }).await {
-                Ok(IpcResponse::Logs { lines: new_lines, total: new_total }) => {
+                Ok(IpcResponse::Logs {
+                    lines: new_lines,
+                    total: new_total,
+                }) => {
                     for line in &new_lines {
                         println!("{}", line);
                     }
@@ -567,10 +611,16 @@ async fn cmd_pair_list() -> Result<()> {
             if pending.is_empty() {
                 println!("No pending pairing requests");
             } else {
-                println!("{:<15} {:<20} {}", "Telegram ID", "Username", "Requested At");
+                println!(
+                    "{:<15} {:<20} {}",
+                    "Telegram ID", "Username", "Requested At"
+                );
                 println!("{}", "-".repeat(60));
                 for p in &pending {
-                    println!("{:<15} {:<20} {}", p.telegram_id, p.username, p.requested_at);
+                    println!(
+                        "{:<15} {:<20} {}",
+                        p.telegram_id, p.username, p.requested_at
+                    );
                 }
                 println!("\nApprove:  opencontrol pair approve <telegram_id> --profile <name>");
                 println!("Reject:   opencontrol pair reject <telegram_id>");
@@ -588,7 +638,10 @@ async fn cmd_pair_approve(telegram_id: i64, profile: String) -> Result<()> {
 
     match client_call(
         &cfg.daemon.socket_path,
-        &IpcRequest::PairApprove { telegram_id, profile },
+        &IpcRequest::PairApprove {
+            telegram_id,
+            profile,
+        },
     )
     .await?
     {
@@ -601,7 +654,12 @@ async fn cmd_pair_approve(telegram_id: i64, profile: String) -> Result<()> {
 
 async fn cmd_pair_reject(telegram_id: i64) -> Result<()> {
     let cfg = config::Config::load().await?;
-    match client_call(&cfg.daemon.socket_path, &IpcRequest::PairReject { telegram_id }).await? {
+    match client_call(
+        &cfg.daemon.socket_path,
+        &IpcRequest::PairReject { telegram_id },
+    )
+    .await?
+    {
         IpcResponse::Ok { message } => println!("{}", message),
         IpcResponse::Error { message } => bail!("{}", message),
         _ => bail!("Unexpected response"),
@@ -631,7 +689,12 @@ async fn cmd_users_list() -> Result<()> {
 
 async fn cmd_users_remove(telegram_id: i64) -> Result<()> {
     let cfg = config::Config::load().await?;
-    match client_call(&cfg.daemon.socket_path, &IpcRequest::UserRemove { telegram_id }).await? {
+    match client_call(
+        &cfg.daemon.socket_path,
+        &IpcRequest::UserRemove { telegram_id },
+    )
+    .await?
+    {
         IpcResponse::Ok { message } => println!("{}", message),
         IpcResponse::Error { message } => bail!("{}", message),
         _ => bail!("Unexpected response"),
@@ -660,7 +723,11 @@ async fn cmd_profiles_list() -> Result<()> {
                 if p.fs_enabled {
                     if let Some(fs) = &p.fs {
                         let fmt = |v: &Vec<String>| {
-                            if v.is_empty() { "(none)".to_string() } else { v.join(", ") }
+                            if v.is_empty() {
+                                "(none)".to_string()
+                            } else {
+                                v.join(", ")
+                            }
                         };
                         println!("      read:     {}", fmt(&fs.read));
                         println!("      read_dir: {}", fmt(&fs.read_dir));
@@ -760,7 +827,14 @@ async fn cmd_chat(profile: String) -> Result<()> {
             break;
         }
         if input == "/reset" {
-            match client_call(&socket, &IpcRequest::ChatReset { profile: profile.clone() }).await? {
+            match client_call(
+                &socket,
+                &IpcRequest::ChatReset {
+                    profile: profile.clone(),
+                },
+            )
+            .await?
+            {
                 IpcResponse::Ok { message } => println!("  [{}]", message),
                 IpcResponse::Error { message } => eprintln!("Error: {}", message),
                 _ => eprintln!("Unexpected response"),
@@ -770,7 +844,10 @@ async fn cmd_chat(profile: String) -> Result<()> {
 
         match client_call(
             &socket,
-            &IpcRequest::Chat { message: input.to_string(), profile: profile.clone() },
+            &IpcRequest::Chat {
+                message: input.to_string(),
+                profile: profile.clone(),
+            },
         )
         .await?
         {
@@ -793,8 +870,7 @@ async fn cmd_install_service() -> Result<()> {
     );
 
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    let systemd_dir = std::path::PathBuf::from(home)
-        .join(".config/systemd/user");
+    let systemd_dir = std::path::PathBuf::from(home).join(".config/systemd/user");
     tokio::fs::create_dir_all(&systemd_dir).await?;
 
     let unit_path = systemd_dir.join("opencontrol.service");

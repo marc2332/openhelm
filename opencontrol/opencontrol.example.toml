@@ -31,10 +31,10 @@ bot_token = "..."
 fs = true
 
 [profiles.readonly.fs]
-read     = ["/home/alice/docs"]
+read = ["/home/alice/docs"]
 read_dir = ["/home/alice/docs"]
-write    = []   # empty = operation disabled
-mkdir    = []
+write = []                      # empty = operation disabled
+mkdir = []
 
 [profiles.developer]
 system_prompt = "You are a coding assistant. Help with code, files, and projects."
@@ -43,10 +43,10 @@ system_prompt = "You are a coding assistant. Help with code, files, and projects
 fs = true
 
 [profiles.developer.fs]
-read     = ["/home/alice/projects"]
+read = ["/home/alice/projects"]
 read_dir = ["/home/alice/projects"]
-write    = ["/home/alice/projects"]
-mkdir    = ["/home/alice/projects"]
+write = ["/home/alice/projects"]
+mkdir = ["/home/alice/projects"]
 
 # ─── Paired users ─────────────────────────────────────────────────────────────
 # Added automatically via `opencontrol pair approve <id> --profile <name>`

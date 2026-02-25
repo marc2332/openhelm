@@ -3,8 +3,8 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use tokio::fs;
 
-use crate::ai::client::ToolDefinition;
 use super::{Tool, ToolContext, ToolOutput};
+use crate::ai::client::ToolDefinition;
 
 fn resolve_path(raw_path: &str) -> Result<PathBuf> {
     let path = PathBuf::from(raw_path);
@@ -70,7 +70,9 @@ fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<
 pub struct FsReadTool;
 
 impl Tool for FsReadTool {
-    fn name(&self) -> &'static str { "fs_read" }
+    fn name(&self) -> &'static str {
+        "fs_read"
+    }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
@@ -103,7 +105,10 @@ impl Tool for FsReadTool {
                 .await
                 .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-            Ok(ToolOutput { success: true, output: contents })
+            Ok(ToolOutput {
+                success: true,
+                output: contents,
+            })
         })
     }
 }
@@ -111,7 +116,9 @@ impl Tool for FsReadTool {
 pub struct FsWriteTool;
 
 impl Tool for FsWriteTool {
-    fn name(&self) -> &'static str { "fs_write" }
+    fn name(&self) -> &'static str {
+        "fs_write"
+    }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
@@ -141,7 +148,9 @@ impl Tool for FsWriteTool {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let path_str = args["path"].as_str().context("Missing 'path' argument")?;
-            let content = args["content"].as_str().context("Missing 'content' argument")?;
+            let content = args["content"]
+                .as_str()
+                .context("Missing 'content' argument")?;
             let path = resolve_path(path_str)?;
             check_allowed(&path, &context.fs.write, "write")?;
 
@@ -166,7 +175,9 @@ impl Tool for FsWriteTool {
 pub struct FsListTool;
 
 impl Tool for FsListTool {
-    fn name(&self) -> &'static str { "fs_list" }
+    fn name(&self) -> &'static str {
+        "fs_list"
+    }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
@@ -228,7 +239,9 @@ impl Tool for FsListTool {
 pub struct FsMkdirTool;
 
 impl Tool for FsMkdirTool {
-    fn name(&self) -> &'static str { "fs_mkdir" }
+    fn name(&self) -> &'static str {
+        "fs_mkdir"
+    }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(

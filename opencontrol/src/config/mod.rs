@@ -168,15 +168,18 @@ impl Config {
             fs::create_dir_all(parent).await?;
         }
         let contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
-        fs::write(path, contents).await.with_context(|| {
-            format!("Failed to write config to {}", path.display())
-        })?;
+        fs::write(path, contents)
+            .await
+            .with_context(|| format!("Failed to write config to {}", path.display()))?;
         Ok(())
     }
 
     /// Find a user by telegram_id.
     pub fn find_user(&self, telegram_id: i64) -> Option<&TelegramUser> {
-        self.telegram.users.iter().find(|u| u.telegram_id == telegram_id)
+        self.telegram
+            .users
+            .iter()
+            .find(|u| u.telegram_id == telegram_id)
     }
 
     /// Resolve a profile by name, returning a clear error if it doesn't exist.
@@ -215,5 +218,4 @@ impl Config {
             .and_then(|p| p.system_prompt.clone())
             .unwrap_or_else(|| self.ai.system_prompt.clone())
     }
-
 }

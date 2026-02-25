@@ -109,7 +109,14 @@ impl Daemon {
                         let bot_connected = bot_connected_arc.clone();
                         let log_buf = log_buf_arc.clone();
                         tokio::spawn(handle_ipc_connection(
-                            stream, config, sessions, audit, pending, bot_connected, log_buf, start_time,
+                            stream,
+                            config,
+                            sessions,
+                            audit,
+                            pending,
+                            bot_connected,
+                            log_buf,
+                            start_time,
                         ));
                     }
                     Err(e) => {
@@ -146,7 +153,17 @@ async fn handle_ipc_connection(
         }
     };
 
-    let resp = dispatch(req, config, sessions, audit, pending, bot_connected, log_buf, start_time).await;
+    let resp = dispatch(
+        req,
+        config,
+        sessions,
+        audit,
+        pending,
+        bot_connected,
+        log_buf,
+        start_time,
+    )
+    .await;
 
     if let Err(e) = send_response(&mut stream, &resp).await {
         warn!(error = %e, "Failed to send IPC response");
@@ -181,11 +198,16 @@ async fn dispatch(
             IpcResponse::PairList { pending: pairs }
         }
 
-        IpcRequest::PairApprove { telegram_id, profile } => {
+        IpcRequest::PairApprove {
+            telegram_id,
+            profile,
+        } => {
             {
                 let cfg = config.read().await;
                 if let Err(e) = cfg.require_profile(&profile) {
-                    return IpcResponse::Error { message: e.to_string() };
+                    return IpcResponse::Error {
+                        message: e.to_string(),
+                    };
                 }
             }
 
@@ -196,9 +218,11 @@ async fn dispatch(
 
             let pair = match pair_info {
                 Some(p) => p,
-                None => return IpcResponse::Error {
-                    message: format!("No pending pairing request from {}", telegram_id),
-                },
+                None => {
+                    return IpcResponse::Error {
+                        message: format!("No pending pairing request from {}", telegram_id),
+                    }
+                }
             };
 
             let new_user = TelegramUser {
@@ -218,7 +242,10 @@ async fn dispatch(
                 }
             }
 
-            pending.write().await.retain(|p| p.telegram_id != telegram_id);
+            pending
+                .write()
+                .await
+                .retain(|p| p.telegram_id != telegram_id);
 
             audit.log(AuditEvent::PairingDecision {
                 telegram_id,
@@ -327,7 +354,9 @@ async fn dispatch(
         IpcRequest::Chat { message, profile } => {
             let cfg_snapshot = config.read().await.clone();
             if let Err(e) = cfg_snapshot.require_profile(&profile) {
-                return IpcResponse::Error { message: e.to_string() };
+                return IpcResponse::Error {
+                    message: e.to_string(),
+                };
             }
 
             let cli_user = TelegramUser {
@@ -336,16 +365,23 @@ async fn dispatch(
                 profile,
             };
 
-            match sessions.send_message(&cli_user, Channel::Cli, &message, &cfg_snapshot).await {
+            match sessions
+                .send_message(&cli_user, Channel::Cli, &message, &cfg_snapshot)
+                .await
+            {
                 Ok(reply) => IpcResponse::ChatReply { message: reply },
-                Err(e) => IpcResponse::Error { message: e.to_string() },
+                Err(e) => IpcResponse::Error {
+                    message: e.to_string(),
+                },
             }
         }
 
         IpcRequest::ChatReset { profile } => {
             let _ = profile;
             sessions.reset_session(0).await;
-            IpcResponse::Ok { message: "CLI session reset".to_string() }
+            IpcResponse::Ok {
+                message: "CLI session reset".to_string(),
+            }
         }
 
         IpcRequest::Logs { lines, offset } => {
@@ -354,7 +390,10 @@ async fn dispatch(
             } else {
                 log_buf.since(offset)
             };
-            IpcResponse::Logs { lines: log_lines, total }
+            IpcResponse::Logs {
+                lines: log_lines,
+                total,
+            }
         }
 
         IpcRequest::Shutdown => {
@@ -363,7 +402,9 @@ async fn dispatch(
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 std::process::exit(0);
             });
-            IpcResponse::Ok { message: "Daemon shutting down".to_string() }
+            IpcResponse::Ok {
+                message: "Daemon shutting down".to_string(),
+            }
         }
     }
 }

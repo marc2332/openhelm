@@ -53,7 +53,10 @@ impl Tool for SdkToolAdapter {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let result = self.0.execute(args).await?;
-            Ok(ToolOutput { success: result.success, output: result.output })
+            Ok(ToolOutput {
+                success: result.success,
+                output: result.output,
+            })
         })
     }
 }
@@ -71,9 +74,7 @@ pub struct SkillRegistry {
 impl SkillRegistry {
     pub fn new() -> Self {
         Self {
-            skills: vec![
-                Box::new(opencontrol_github::GithubSkill),
-            ],
+            skills: vec![Box::new(opencontrol_github::GithubSkill)],
         }
     }
 

@@ -114,35 +114,47 @@ pub struct ProfileInfo {
 pub async fn send_request(stream: &mut UnixStream, req: &IpcRequest) -> Result<()> {
     let mut line = serde_json::to_string(req).context("Failed to serialize IPC request")?;
     line.push('\n');
-    stream.write_all(line.as_bytes()).await.context("Failed to write IPC request")?;
+    stream
+        .write_all(line.as_bytes())
+        .await
+        .context("Failed to write IPC request")?;
     Ok(())
 }
 
 pub async fn recv_response(stream: &mut UnixStream) -> Result<IpcResponse> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line).await.context("Failed to read IPC response")?;
+    reader
+        .read_line(&mut line)
+        .await
+        .context("Failed to read IPC response")?;
     serde_json::from_str(line.trim()).context("Failed to parse IPC response")
 }
 
 pub async fn send_response(stream: &mut UnixStream, resp: &IpcResponse) -> Result<()> {
     let mut line = serde_json::to_string(resp).context("Failed to serialize IPC response")?;
     line.push('\n');
-    stream.write_all(line.as_bytes()).await.context("Failed to write IPC response")?;
+    stream
+        .write_all(line.as_bytes())
+        .await
+        .context("Failed to write IPC response")?;
     Ok(())
 }
 
 pub async fn recv_request(stream: &mut UnixStream) -> Result<IpcRequest> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line).await.context("Failed to read IPC request")?;
+    reader
+        .read_line(&mut line)
+        .await
+        .context("Failed to read IPC request")?;
     serde_json::from_str(line.trim()).context("Failed to parse IPC request")
 }
 
 pub async fn client_call(socket_path: &str, req: &IpcRequest) -> Result<IpcResponse> {
-    let mut stream = UnixStream::connect(socket_path)
-        .await
-        .with_context(|| format!("Cannot connect to daemon socket at {socket_path}. Is the daemon running?"))?;
+    let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
+        format!("Cannot connect to daemon socket at {socket_path}. Is the daemon running?")
+    })?;
     send_request(&mut stream, req).await?;
     recv_response(&mut stream).await
 }

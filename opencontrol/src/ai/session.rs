@@ -4,10 +4,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+use super::client::{AiClient, ChatMessage};
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
 use crate::tools::{SkillRegistry, ToolContext, ToolRegistry};
-use super::client::{AiClient, ChatMessage};
 
 pub struct Session {
     pub user_id: i64,
@@ -84,7 +84,10 @@ impl SessionManager {
         }
 
         let session = Session::new(user, channel, self.timeout_minutes);
-        self.sessions.write().await.insert(user.telegram_id, session);
+        self.sessions
+            .write()
+            .await
+            .insert(user.telegram_id, session);
         true
     }
 
@@ -130,14 +133,19 @@ impl SessionManager {
         let tool_defs = tools.definitions_for(profile);
         let tool_context = ToolContext::from_profile(profile);
 
-        self.sessions.write().await
+        self.sessions
+            .write()
+            .await
             .get_mut(&user.telegram_id)
             .expect("session must exist")
             .history
             .push(ChatMessage::user(user_message));
 
         loop {
-            let history_snapshot = self.sessions.read().await
+            let history_snapshot = self
+                .sessions
+                .read()
+                .await
                 .get(&user.telegram_id)
                 .expect("session must exist")
                 .history
@@ -146,7 +154,10 @@ impl SessionManager {
             let mut messages = vec![ChatMessage::system(&system_prompt)];
             messages.extend(history_snapshot);
 
-            let resp = self.client.chat(&model, &messages, Some(&tool_defs)).await?;
+            let resp = self
+                .client
+                .chat(&model, &messages, Some(&tool_defs))
+                .await?;
 
             let choice = resp
                 .choices
@@ -158,14 +169,18 @@ impl SessionManager {
             let finish_reason = choice.finish_reason.as_deref().unwrap_or("stop");
             let tool_calls = assistant_msg.tool_calls.as_deref().unwrap_or(&[]);
 
-            self.sessions.write().await
+            self.sessions
+                .write()
+                .await
                 .get_mut(&user.telegram_id)
                 .expect("session must exist")
                 .history
                 .push(assistant_msg.clone());
 
             if finish_reason == "stop" || tool_calls.is_empty() {
-                self.sessions.write().await
+                self.sessions
+                    .write()
+                    .await
                     .get_mut(&user.telegram_id)
                     .expect("session must exist")
                     .touch();
@@ -208,7 +223,11 @@ impl SessionManager {
                 });
 
                 let result_content = if !allowed {
-                    warn!(tool = tool_name, user_id = user.telegram_id, "Tool call denied");
+                    warn!(
+                        tool = tool_name,
+                        user_id = user.telegram_id,
+                        "Tool call denied"
+                    );
                     if found.is_none() {
                         format!("Error: Unknown tool '{}'", tool_name)
                     } else {
@@ -241,7 +260,9 @@ impl SessionManager {
                     }
                 };
 
-                self.sessions.write().await
+                self.sessions
+                    .write()
+                    .await
                     .get_mut(&user.telegram_id)
                     .expect("session must exist")
                     .history
@@ -264,6 +285,11 @@ impl SessionManager {
     }
 
     pub async fn active_count(&self) -> usize {
-        self.sessions.read().await.values().filter(|s| !s.is_timed_out()).count()
+        self.sessions
+            .read()
+            .await
+            .values()
+            .filter(|s| !s.is_timed_out())
+            .count()
     }
 }
