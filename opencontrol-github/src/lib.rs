@@ -1,58 +1,35 @@
-use std::pin::Pin;
-use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use base64::Engine as _;
-use reqwest::{Client, RequestBuilder};
-use serde::Deserialize;
+use octocrab::Octocrab;
 use serde_json::{json, Value};
 
 use opencontrol_sdk::{Skill, Tool, ToolDefinition, ToolOutput};
 
-#[derive(Clone)]
-struct GithubClient {
-    http: Client,
-    token: String,
+fn repo_arg(args: &Value) -> Result<(String, String)> {
+    let repo = args["repo"].as_str().context("Missing 'repo' argument (format: owner/repo)")?;
+    let parts: Vec<&str> = repo.split('/').collect();
+    if parts.len() != 2 {
+        bail!("'repo' must be in 'owner/repo' format, got: {}", repo);
+    }
+    Ok((parts[0].to_string(), parts[1].to_string()))
 }
+
+struct GithubClient(Octocrab);
 
 impl GithubClient {
     fn new(token: impl Into<String>) -> Result<Self> {
-        let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent("opencontrol")
+        let octocrab = Octocrab::builder()
+            .personal_token(token.into())
             .build()
-            .context("Failed to build HTTP client")?;
-        Ok(Self { http, token: token.into() })
+            .context("Failed to build GitHub client")?;
+        Ok(Self(octocrab))
     }
 
-    fn get(&self, path: &str) -> RequestBuilder {
-        let url = format!("https://api.github.com{}", path);
-        self.http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+    async fn get(&self, path: &str) -> Result<Value> {
+        let response = self.0.get(path, None::<&()>).await?;
+        Ok(response)
     }
-
-    async fn get_json(&self, path: &str) -> Result<Value> {
-        let resp = self.get(path).send().await
-            .with_context(|| format!("GitHub API request failed: GET {}", path))?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            bail!("GitHub API returned {}: {}", status, body);
-        }
-        resp.json::<Value>().await.context("Failed to parse GitHub API response")
-    }
-}
-
-fn repo_arg(args: &Value) -> Result<String> {
-    let repo = args["repo"].as_str().context("Missing 'repo' argument (format: owner/repo)")?;
-    if !repo.contains('/') {
-        bail!("'repo' must be in 'owner/repo' format, got: {}", repo);
-    }
-    Ok(repo.to_string())
 }
 
 struct GithubGetRepoTool(Arc<GithubClient>);
@@ -63,27 +40,24 @@ impl Tool for GithubGetRepoTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             self.name(),
-            "Get metadata for a GitHub repository (description, stars, forks, default branch, open issues count, topics, license, visibility)",
+            "Get metadata for a GitHub repository",
             json!({
                 "type": "object",
                 "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository in 'owner/repo' format"
-                    }
+                    "repo": { "type": "string", "description": "Repository in 'owner/repo' format" }
                 },
                 "required": ["repo"]
             }),
         )
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>> {
+    fn execute<'a>(&'a self, args: &'a Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
-            let repo = repo_arg(args)?;
-            let data = self.0.get_json(&format!("/repos/{}", repo)).await?;
+            let (owner, repo) = repo_arg(args)?;
+            let data = self.0.get(&format!("/repos/{}/{}", owner, repo)).await?;
 
             let output = format!(
-                "Repo:          {}\nDescription:   {}\nVisibility:    {}\nDefault branch:{}\nStars:         {}\nForks:         {}\nOpen issues:   {}\nTopics:        {}\nLicense:       {}\nURL:           {}",
+                "Repo:          {}\nDescription:   {}\nVisibility:    {}\nDefault branch:{}\nStars:         {}\nForks:         {}\nOpen issues:   {}\nLicense:       {}\nURL:           {}",
                 data["full_name"].as_str().unwrap_or("-"),
                 data["description"].as_str().unwrap_or("(none)"),
                 data["visibility"].as_str().unwrap_or("-"),
@@ -91,9 +65,6 @@ impl Tool for GithubGetRepoTool {
                 data["stargazers_count"].as_u64().unwrap_or(0),
                 data["forks_count"].as_u64().unwrap_or(0),
                 data["open_issues_count"].as_u64().unwrap_or(0),
-                data["topics"].as_array()
-                    .map(|t| t.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
-                    .unwrap_or_default(),
                 data["license"]["name"].as_str().unwrap_or("(none)"),
                 data["html_url"].as_str().unwrap_or("-"),
             );
@@ -115,53 +86,38 @@ impl Tool for GithubListIssuesTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository in 'owner/repo' format"
-                    },
-                    "state": {
-                        "type": "string",
-                        "enum": ["open", "closed", "all"],
-                        "description": "Issue state filter (default: open)"
-                    },
-                    "label": {
-                        "type": "string",
-                        "description": "Filter by label name"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max number of issues to return (default: 20, max: 100)"
-                    }
+                    "repo": { "type": "string", "description": "Repository in 'owner/repo' format" },
+                    "state": { "type": "string", "enum": ["open", "closed", "all"], "description": "Issue state filter" },
+                    "limit": { "type": "integer", "description": "Max issues (default: 20, max: 100)" }
                 },
                 "required": ["repo"]
             }),
         )
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>> {
+    fn execute<'a>(&'a self, args: &'a Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
-            let repo = repo_arg(args)?;
+            let (owner, repo) = repo_arg(args)?;
             let state = args["state"].as_str().unwrap_or("open");
             let limit = args["limit"].as_u64().unwrap_or(20).min(100);
 
-            let mut path = format!("/repos/{}/issues?state={}&per_page={}&pulls=false", repo, state, limit);
-            if let Some(label) = args["label"].as_str() {
-                path.push_str(&format!("&labels={}", label));
-            }
+            let data = self.0.get(&format!(
+                "/repos/{}/{}/issues?state={}&per_page={}&pulls=false",
+                owner, repo, state, limit
+            )).await?;
 
-            let data = self.0.get_json(&path).await?;
             let issues = data.as_array().context("Expected array of issues")?;
+            let issues: Vec<_> = issues.iter().filter(|i| i["pull_request"].is_null()).collect();
 
             if issues.is_empty() {
                 return Ok(ToolOutput { success: true, output: "No issues found.".to_string() });
             }
 
             let lines: Vec<String> = issues.iter()
-                .filter(|i| i["pull_request"].is_null()) // exclude PRs from issues endpoint
                 .map(|i| format!(
                     "#{} [{}] {} ({})",
                     i["number"].as_u64().unwrap_or(0),
-                    i["state"].as_str().unwrap_or("?"),
+                    i["state"].as_str().unwrap_or("open"),
                     i["title"].as_str().unwrap_or("(no title)"),
                     i["user"]["login"].as_str().unwrap_or("?"),
                 ))
@@ -184,32 +140,26 @@ impl Tool for GithubGetIssueTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository in 'owner/repo' format"
-                    },
-                    "number": {
-                        "type": "integer",
-                        "description": "Issue number"
-                    }
+                    "repo": { "type": "string", "description": "Repository in 'owner/repo' format" },
+                    "number": { "type": "integer", "description": "Issue number" }
                 },
                 "required": ["repo", "number"]
             }),
         )
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>> {
+    fn execute<'a>(&'a self, args: &'a Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
-            let repo = repo_arg(args)?;
+            let (owner, repo) = repo_arg(args)?;
             let number = args["number"].as_u64().context("Missing 'number' argument")?;
 
-            let issue = self.0.get_json(&format!("/repos/{}/issues/{}", repo, number)).await?;
-            let comments = self.0.get_json(&format!("/repos/{}/issues/{}/comments", repo, number)).await?;
+            let issue = self.0.get(&format!("/repos/{}/{}/issues/{}", owner, repo, number)).await?;
+            let comments = self.0.get(&format!("/repos/{}/{}/issues/{}/comments", owner, repo, number)).await?;
 
             let mut out = format!(
                 "#{} [{}] {}\nAuthor: {}\nCreated: {}\nURL: {}\n\n{}\n",
                 issue["number"].as_u64().unwrap_or(0),
-                issue["state"].as_str().unwrap_or("?"),
+                issue["state"].as_str().unwrap_or("open"),
                 issue["title"].as_str().unwrap_or("(no title)"),
                 issue["user"]["login"].as_str().unwrap_or("?"),
                 issue["created_at"].as_str().unwrap_or("?"),
@@ -248,33 +198,26 @@ impl Tool for GithubListPrsTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository in 'owner/repo' format"
-                    },
-                    "state": {
-                        "type": "string",
-                        "enum": ["open", "closed", "all"],
-                        "description": "PR state filter (default: open)"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max number of PRs to return (default: 20, max: 100)"
-                    }
+                    "repo": { "type": "string", "description": "Repository in 'owner/repo' format" },
+                    "state": { "type": "string", "enum": ["open", "closed", "all"], "description": "PR state filter" },
+                    "limit": { "type": "integer", "description": "Max PRs (default: 20, max: 100)" }
                 },
                 "required": ["repo"]
             }),
         )
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>> {
+    fn execute<'a>(&'a self, args: &'a Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
-            let repo = repo_arg(args)?;
+            let (owner, repo) = repo_arg(args)?;
             let state = args["state"].as_str().unwrap_or("open");
             let limit = args["limit"].as_u64().unwrap_or(20).min(100);
 
-            let path = format!("/repos/{}/pulls?state={}&per_page={}", repo, state, limit);
-            let data = self.0.get_json(&path).await?;
+            let data = self.0.get(&format!(
+                "/repos/{}/{}/pulls?state={}&per_page={}",
+                owner, repo, state, limit
+            )).await?;
+
             let prs = data.as_array().context("Expected array of PRs")?;
 
             if prs.is_empty() {
@@ -285,7 +228,7 @@ impl Tool for GithubListPrsTool {
                 .map(|pr| format!(
                     "#{} [{}] {} ({} → {}) by {}",
                     pr["number"].as_u64().unwrap_or(0),
-                    pr["state"].as_str().unwrap_or("?"),
+                    pr["state"].as_str().unwrap_or("open"),
                     pr["title"].as_str().unwrap_or("(no title)"),
                     pr["head"]["ref"].as_str().unwrap_or("?"),
                     pr["base"]["ref"].as_str().unwrap_or("?"),
@@ -310,32 +253,26 @@ impl Tool for GithubGetPrTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository in 'owner/repo' format"
-                    },
-                    "number": {
-                        "type": "integer",
-                        "description": "Pull request number"
-                    }
+                    "repo": { "type": "string", "description": "Repository in 'owner/repo' format" },
+                    "number": { "type": "integer", "description": "Pull request number" }
                 },
                 "required": ["repo", "number"]
             }),
         )
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>> {
+    fn execute<'a>(&'a self, args: &'a Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
-            let repo = repo_arg(args)?;
+            let (owner, repo) = repo_arg(args)?;
             let number = args["number"].as_u64().context("Missing 'number' argument")?;
 
-            let pr = self.0.get_json(&format!("/repos/{}/pulls/{}", repo, number)).await?;
-            let comments = self.0.get_json(&format!("/repos/{}/issues/{}/comments", repo, number)).await?;
+            let pr = self.0.get(&format!("/repos/{}/{}/pulls/{}", owner, repo, number)).await?;
+            let comments = self.0.get(&format!("/repos/{}/{}/issues/{}/comments", owner, repo, number)).await?;
 
             let mut out = format!(
                 "#{} [{}] {}\nAuthor:  {}\nBranch:  {} → {}\nCreated: {}\nURL:     {}\nChanges: +{} -{} in {} file(s)\n\n{}\n",
                 pr["number"].as_u64().unwrap_or(0),
-                pr["state"].as_str().unwrap_or("?"),
+                pr["state"].as_str().unwrap_or("open"),
                 pr["title"].as_str().unwrap_or("(no title)"),
                 pr["user"]["login"].as_str().unwrap_or("?"),
                 pr["head"]["ref"].as_str().unwrap_or("?"),
@@ -367,7 +304,7 @@ impl Tool for GithubGetPrTool {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 struct ContentResponse {
     content: Option<String>,
     encoding: Option<String>,
@@ -386,36 +323,29 @@ impl Tool for GithubGetFileTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository in 'owner/repo' format"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file within the repository"
-                    },
-                    "ref": {
-                        "type": "string",
-                        "description": "Branch, tag, or commit SHA (default: repo's default branch)"
-                    }
+                    "repo": { "type": "string", "description": "Repository in 'owner/repo' format" },
+                    "path": { "type": "string", "description": "Path to the file within the repository" },
+                    "ref": { "type": "string", "description": "Branch, tag, or commit SHA" }
                 },
                 "required": ["repo", "path"]
             }),
         )
     }
 
-    fn execute<'a>(&'a self, args: &'a Value) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>> {
+    fn execute<'a>(&'a self, args: &'a Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
-            let repo = repo_arg(args)?;
+            let (owner, repo) = repo_arg(args)?;
             let path = args["path"].as_str().context("Missing 'path' argument")?;
-            let mut api_path = format!("/repos/{}/contents/{}", repo, path);
-            if let Some(r) = args["ref"].as_str() {
-                api_path.push_str(&format!("?ref={}", r));
-            }
+            let r#ref = args["ref"].as_str();
 
-            let raw = self.0.get_json(&api_path).await?;
-            let resp: ContentResponse =
-                serde_json::from_value(raw).context("Failed to parse contents response")?;
+            let api_path = if let Some(r) = r#ref {
+                format!("/repos/{}/{}/contents/{}?ref={}", owner, repo, path, r)
+            } else {
+                format!("/repos/{}/{}/contents/{}", owner, repo, path)
+            };
+
+            let raw = self.0.get(&api_path).await?;
+            let resp: ContentResponse = serde_json::from_value(raw).context("Failed to parse contents response")?;
 
             if let Some(msg) = resp.message {
                 bail!("GitHub API error: {}", msg);
@@ -425,13 +355,13 @@ impl Tool for GithubGetFileTool {
             let encoding = resp.encoding.as_deref().unwrap_or("none");
 
             if encoding == "base64" {
-                // GitHub returns base64 with newlines — strip them before decoding
+                use base64::Engine as _;
                 let cleaned: String = content.chars().filter(|c| *c != '\n').collect();
                 let decoded = base64::engine::general_purpose::STANDARD
                     .decode(&cleaned)
                     .context("Failed to decode base64 content")?;
                 let text = String::from_utf8(decoded)
-                    .context("File content is not valid UTF-8 — binary file?")?;
+                    .context("File content is not valid UTF-8")?;
                 Ok(ToolOutput { success: true, output: text })
             } else {
                 Ok(ToolOutput { success: true, output: content })
