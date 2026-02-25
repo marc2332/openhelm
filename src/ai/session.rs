@@ -122,6 +122,14 @@ impl SessionManager {
         let session_id = self.get_or_create_session_id(user, channel).await;
 
         let preview = user_message.chars().take(100).collect::<String>();
+        info!(
+            user_id = user.telegram_id,
+            username = %user.name,
+            profile = %user.profile,
+            channel = ?channel,
+            preview = %preview,
+            "Message received"
+        );
         self.audit.log(AuditEvent::MessageSent {
             user_id: user.telegram_id,
             session_id: session_id.clone(),
@@ -189,7 +197,17 @@ impl SessionManager {
                     .find(|s| s.id == session_id)
                     .expect("session must exist")
                     .touch();
-                return Ok(assistant_msg.content.unwrap_or_default());
+                let reply = assistant_msg.content.unwrap_or_default();
+                let reply_preview = reply.chars().take(100).collect::<String>();
+                info!(
+                    user_id = user.telegram_id,
+                    username = %user.name,
+                    profile = %user.profile,
+                    channel = ?channel,
+                    preview = %reply_preview,
+                    "Reply sent"
+                );
+                return Ok(reply);
             }
 
             debug!(count = tool_calls.len(), "Processing tool calls");
@@ -269,7 +287,18 @@ impl SessionManager {
         }
     }
 
+    /// Remove sessions that have exceeded the inactivity timeout.
+    /// Returns the number of sessions pruned.
+    pub async fn prune_timed_out(&self) -> usize {
+        let mut sessions = self.sessions.lock().await;
+        let before = sessions.len();
+        sessions.retain(|s| !s.is_timed_out());
+        before - sessions.len()
+    }
+
+    /// Count of currently active (non-timed-out) sessions.
     pub async fn active_count(&self) -> usize {
-        self.sessions.lock().await.len()
+        let sessions = self.sessions.lock().await;
+        sessions.iter().filter(|s| !s.is_timed_out()).count()
     }
 }

@@ -3,6 +3,7 @@ mod audit;
 mod config;
 mod daemon;
 mod ipc;
+mod log_buffer;
 mod permissions;
 mod telegram;
 mod tools;
@@ -10,10 +11,12 @@ mod tools;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use ipc::{client_call, IpcRequest, IpcResponse};
+use log_buffer::LogBuffer;
 use std::io::{BufRead, Write};
+use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 // ─── CLI definition ───────────────────────────────────────────────────────────
 
@@ -34,10 +37,13 @@ enum Command {
     Status,
     /// Restart the daemon (systemd only)
     Restart,
-    /// Tail daemon logs (via journalctl)
+    /// Show recent daemon logs
     Logs {
         #[arg(short, long)]
         follow: bool,
+        /// Number of lines to show
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
     },
     /// Manage pairing requests
     #[command(subcommand)]
@@ -60,7 +66,11 @@ enum Command {
         lines: usize,
     },
     /// Start an interactive AI chat session via CLI
-    Chat,
+    Chat {
+        /// Profile to use (must exist in opencontrol.toml)
+        #[arg(short, long)]
+        profile: String,
+    },
     /// Generate the default config file
     Init,
     /// Install the systemd user service unit
@@ -98,26 +108,81 @@ enum ProfilesCommand {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+// ─── In-memory log layer ──────────────────────────────────────────────────────
+
+struct LogBufferLayer(Arc<LogBuffer>);
+
+impl<S> tracing_subscriber::Layer<S> for LogBufferLayer
+where
+    S: tracing::Subscriber,
+{
+    fn enabled(
+        &self,
+        metadata: &tracing::Metadata<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        metadata.target().starts_with("opencontrol")
+    }
+
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        use tracing_subscriber::field::Visit;
+
+        struct Visitor(String);
+        impl Visit for Visitor {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{:?}", value).trim_matches('"').to_string();
+                }
+            }
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "message" {
+                    self.0 = value.to_string();
+                }
+            }
+        }
+
+        let mut visitor = Visitor(String::new());
+        event.record(&mut visitor);
+
+        let level = event.metadata().level();
+        let target = event.metadata().target();
+        let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+        let line = format!("{} {:5} [{}] {}", ts, level, target, visitor.0);
+        self.0.push(line);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env()
-                .add_directive("opencontrol=info".parse().unwrap()),
+    // Shared log buffer — 1000 lines capacity
+    let log_buf = Arc::new(LogBuffer::new(1000));
+
+    let env_filter = EnvFilter::from_default_env()
+        .add_directive("opencontrol=info".parse().unwrap());
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .compact()
+                .with_filter(env_filter),
         )
-        .with_target(false)
-        .compact()
+        .with(LogBufferLayer(log_buf.clone()))
         .init();
 
     match cli.command {
         Command::Init => cmd_init().await,
-        Command::Start => cmd_start().await,
+        Command::Start => cmd_start(log_buf).await,
         Command::Stop => cmd_stop().await,
         Command::Status => cmd_status().await,
         Command::Restart => cmd_restart().await,
-        Command::Logs { follow } => cmd_logs(follow),
+        Command::Logs { follow, lines } => cmd_logs(follow, lines).await,
         Command::Pair(sub) => match sub {
             PairCommand::List => cmd_pair_list().await,
             PairCommand::Approve { telegram_id, profile } => {
@@ -133,7 +198,7 @@ async fn main() -> Result<()> {
             ProfilesCommand::List => cmd_profiles_list().await,
         },
         Command::Audit { follow, user, lines } => cmd_audit(follow, user, lines).await,
-        Command::Chat => cmd_chat().await,
+        Command::Chat { profile } => cmd_chat(profile).await,
         Command::InstallService => cmd_install_service().await,
     }
 }
@@ -152,12 +217,12 @@ async fn cmd_init() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_start() -> Result<()> {
+async fn cmd_start(log_buf: Arc<LogBuffer>) -> Result<()> {
     let cfg = config::Config::load()
         .await
         .context("Failed to load config. Run `opencontrol init` first.")?;
     info!("Starting daemon");
-    let d = daemon::Daemon::new(cfg).await?;
+    let d = daemon::Daemon::new(cfg, log_buf).await?;
     d.run().await
 }
 
@@ -222,18 +287,49 @@ async fn cmd_restart() -> Result<()> {
     Ok(())
 }
 
-fn cmd_logs(follow: bool) -> Result<()> {
-    let mut args = vec!["--user", "-u", "opencontrol.service"];
+async fn cmd_logs(follow: bool, lines: usize) -> Result<()> {
+    let cfg = config::Config::load().await.ok();
+    let socket = cfg
+        .as_ref()
+        .map(|c| c.daemon.socket_path.as_str())
+        .unwrap_or("/tmp/opencontrol.sock");
+
+    // Fetch initial batch
+    let total = match client_call(socket, &IpcRequest::Logs { lines, offset: 0 }).await {
+        Ok(IpcResponse::Logs { lines: log_lines, total }) => {
+            for line in &log_lines {
+                println!("{}", line);
+            }
+            total
+        }
+        Err(e) => {
+            eprintln!("Daemon is not running: {}", e);
+            eprintln!("Hint: if running under systemd try: journalctl --user -u opencontrol.service -f");
+            return Ok(());
+        }
+        Ok(_) => bail!("Unexpected response from daemon"),
+    };
+
     if follow {
-        args.push("-f");
+        let mut offset = total;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            match client_call(socket, &IpcRequest::Logs { lines: 0, offset }).await {
+                Ok(IpcResponse::Logs { lines: new_lines, total: new_total }) => {
+                    for line in &new_lines {
+                        println!("{}", line);
+                    }
+                    offset = new_total;
+                }
+                Err(_) => {
+                    eprintln!("--- daemon disconnected ---");
+                    return Ok(());
+                }
+                Ok(_) => {}
+            }
+        }
     }
-    let status = std::process::Command::new("journalctl")
-        .args(&args)
-        .status()
-        .context("Failed to run journalctl")?;
-    if !status.success() {
-        bail!("journalctl exited with error");
-    }
+
     Ok(())
 }
 
@@ -411,11 +507,16 @@ fn print_audit_line(line: &str, filter_user: Option<i64>) {
     println!("{}", line);
 }
 
-async fn cmd_chat() -> Result<()> {
+async fn cmd_chat(profile: String) -> Result<()> {
     let cfg = config::Config::load().await?;
+
+    // Validate profile exists locally before connecting to daemon
+    cfg.require_profile(&profile)?;
+
     let socket = cfg.daemon.socket_path.clone();
 
-    println!("OpenControl CLI Chat (type 'exit' or Ctrl+C to quit, '/reset' to clear history)");
+    println!("OpenControl CLI Chat [profile: {}]", profile);
+    println!("(type 'exit' or Ctrl+C to quit, '/reset' to clear history)");
     println!("{}", "-".repeat(60));
 
     let stdin = std::io::stdin();
@@ -436,15 +537,20 @@ async fn cmd_chat() -> Result<()> {
             break;
         }
         if input == "/reset" {
-            if let IpcResponse::Ok { message } =
-                client_call(&socket, &IpcRequest::ChatReset).await?
-            {
-                println!("  [{}]", message);
+            match client_call(&socket, &IpcRequest::ChatReset { profile: profile.clone() }).await? {
+                IpcResponse::Ok { message } => println!("  [{}]", message),
+                IpcResponse::Error { message } => eprintln!("Error: {}", message),
+                _ => eprintln!("Unexpected response"),
             }
             continue;
         }
 
-        match client_call(&socket, &IpcRequest::Chat { message: input.to_string() }).await? {
+        match client_call(
+            &socket,
+            &IpcRequest::Chat { message: input.to_string(), profile: profile.clone() },
+        )
+        .await?
+        {
             IpcResponse::ChatReply { message } => println!("\nAssistant: {}\n", message),
             IpcResponse::Error { message } => eprintln!("Error: {}", message),
             _ => eprintln!("Unexpected response"),

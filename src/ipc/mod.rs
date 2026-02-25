@@ -31,8 +31,22 @@ pub enum IpcRequest {
     /// Send a message as a CLI-initiated AI session
     Chat {
         message: String,
+        /// Profile to use for this CLI session (must exist in config)
+        profile: String,
     },
-    ChatReset,
+    ChatReset {
+        /// Profile whose CLI session should be reset
+        profile: String,
+    },
+    /// Fetch recent in-memory daemon log lines.
+    /// Use offset=0 with lines>0 to get the last N lines.
+    /// Use a previously returned `total` as `offset` to poll for new lines only.
+    Logs {
+        /// Max lines to return (used when offset=0)
+        lines: usize,
+        /// Return only lines after this absolute offset (for follow mode)
+        offset: usize,
+    },
     Shutdown,
 }
 
@@ -64,6 +78,11 @@ pub enum IpcResponse {
     },
     ChatReply {
         message: String,
+    },
+    Logs {
+        lines: Vec<String>,
+        /// New total count — pass back as `offset` on next poll
+        total: usize,
     },
 }
 

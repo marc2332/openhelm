@@ -13,6 +13,7 @@ use crate::config::{Config, TelegramUser};
 use crate::ipc::{
     recv_request, send_response, IpcRequest, IpcResponse, PendingPair, ProfileInfo, UserInfo,
 };
+use crate::log_buffer::LogBuffer;
 use crate::telegram::{run_bot, BotState};
 use crate::tools::ToolRegistry;
 
@@ -24,18 +25,20 @@ pub struct Daemon {
     bot_connected: Arc<AtomicBool>,
     start_time: Instant,
     socket_path: String,
+    log_buf: Arc<LogBuffer>,
 }
 
 impl Daemon {
-    pub async fn new(config: Config) -> Result<Self> {
+    pub async fn new(config: Config, log_buf: Arc<LogBuffer>) -> Result<Self> {
         let audit = AuditLogger::new(&config.audit.log_path).await?;
         let client = AiClient::new(&config.ai.api_url, &config.ai.api_key)?;
         let tools = Arc::new(ToolRegistry::new());
+        let timeout_minutes = config.ai.session_timeout_minutes;
         let sessions = Arc::new(SessionManager::new(
             client,
             tools,
             audit.clone(),
-            config.ai.session_timeout_minutes,
+            timeout_minutes,
         ));
         let socket_path = config.daemon.socket_path.clone();
 
@@ -47,6 +50,7 @@ impl Daemon {
             bot_connected: Arc::new(AtomicBool::new(false)),
             start_time: Instant::now(),
             socket_path,
+            log_buf,
         })
     }
 
@@ -72,6 +76,7 @@ impl Daemon {
         let audit_arc = self.audit.clone();
         let pending_arc = self.pending_pairs.clone();
         let bot_connected_arc = self.bot_connected.clone();
+        let log_buf_arc = self.log_buf.clone();
         let start_time = self.start_time;
 
         tokio::spawn(async move {
@@ -79,6 +84,20 @@ impl Daemon {
                 error!(error = %e, "Telegram bot error");
             }
         });
+
+        // Session pruning — remove timed-out sessions every 60 seconds
+        {
+            let sessions_prune = sessions_arc.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    let pruned = sessions_prune.prune_timed_out().await;
+                    if pruned > 0 {
+                        info!(count = pruned, "Pruned timed-out sessions");
+                    }
+                }
+            });
+        }
 
         let ipc_handle = tokio::spawn(async move {
             loop {
@@ -89,8 +108,9 @@ impl Daemon {
                         let audit = audit_arc.clone();
                         let pending = pending_arc.clone();
                         let bot_connected = bot_connected_arc.clone();
+                        let log_buf = log_buf_arc.clone();
                         tokio::spawn(handle_ipc_connection(
-                            stream, config, sessions, audit, pending, bot_connected, start_time,
+                            stream, config, sessions, audit, pending, bot_connected, log_buf, start_time,
                         ));
                     }
                     Err(e) => {
@@ -116,6 +136,7 @@ async fn handle_ipc_connection(
     audit: AuditLogger,
     pending: Arc<RwLock<Vec<PendingPair>>>,
     bot_connected: Arc<AtomicBool>,
+    log_buf: Arc<LogBuffer>,
     start_time: Instant,
 ) {
     let req = match recv_request(&mut stream).await {
@@ -126,7 +147,7 @@ async fn handle_ipc_connection(
         }
     };
 
-    let resp = dispatch(req, config, sessions, audit, pending, bot_connected, start_time).await;
+    let resp = dispatch(req, config, sessions, audit, pending, bot_connected, log_buf, start_time).await;
 
     if let Err(e) = send_response(&mut stream, &resp).await {
         warn!(error = %e, "Failed to send IPC response");
@@ -140,6 +161,7 @@ async fn dispatch(
     audit: AuditLogger,
     pending: Arc<RwLock<Vec<PendingPair>>>,
     bot_connected: Arc<AtomicBool>,
+    log_buf: Arc<LogBuffer>,
     start_time: Instant,
 ) -> IpcResponse {
     match req {
@@ -304,32 +326,41 @@ async fn dispatch(
             IpcResponse::ProfilesList { profiles }
         }
 
-        IpcRequest::Chat { message } => {
-            // CLI chat uses the first configured user's profile, or errors clearly
-            let cli_user = {
-                let cfg = config.read().await;
-                cfg.telegram.users.first().cloned()
-            };
-
-            let cli_user = match cli_user {
-                Some(u) => u,
-                None => return IpcResponse::Error {
-                    message: "No paired users configured. CLI chat requires at least one user \
-                        with a valid profile. Add a [profiles.*] section and pair a user."
-                        .to_string(),
-                },
-            };
-
+        IpcRequest::Chat { message, profile } => {
+            // Validate profile exists
             let cfg_snapshot = config.read().await.clone();
+            if let Err(e) = cfg_snapshot.require_profile(&profile) {
+                return IpcResponse::Error { message: e.to_string() };
+            }
+
+            // Synthetic CLI user — telegram_id=0 is the reserved CLI user slot
+            let cli_user = TelegramUser {
+                telegram_id: 0,
+                name: "cli".to_string(),
+                profile,
+            };
+
             match sessions.send_message(&cli_user, Channel::Cli, &message, &cfg_snapshot).await {
                 Ok(reply) => IpcResponse::ChatReply { message: reply },
                 Err(e) => IpcResponse::Error { message: e.to_string() },
             }
         }
 
-        IpcRequest::ChatReset => {
+        IpcRequest::ChatReset { profile } => {
+            // Reset the synthetic CLI session for this profile.
+            // All CLI sessions use telegram_id=0; reset by user_id.
+            let _ = profile; // profile carried for future per-profile CLI sessions
             sessions.reset_session(0).await;
             IpcResponse::Ok { message: "CLI session reset".to_string() }
+        }
+
+        IpcRequest::Logs { lines, offset } => {
+            let (log_lines, total) = if offset == 0 {
+                log_buf.tail(lines)
+            } else {
+                log_buf.since(offset)
+            };
+            IpcResponse::Logs { lines: log_lines, total }
         }
 
         IpcRequest::Shutdown => {
