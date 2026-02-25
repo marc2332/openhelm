@@ -64,6 +64,11 @@ pub struct ProfilePermissions {
     /// Enable the filesystem tool group
     #[serde(default)]
     pub fs: bool,
+    /// Skill configs keyed by skill name (e.g. "github").
+    /// Presence of a key enables the skill; the value is passed to the skill's
+    /// build_tools() as its per-profile config table.
+    #[serde(default)]
+    pub skills: HashMap<String, toml::Value>,
 }
 
 /// Per-operation filesystem path allowlists.

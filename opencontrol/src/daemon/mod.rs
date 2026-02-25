@@ -15,7 +15,7 @@ use crate::ipc::{
 };
 use crate::log_buffer::LogBuffer;
 use crate::telegram::{run_bot, BotState};
-use crate::tools::ToolRegistry;
+use crate::tools::SkillRegistry;
 
 pub struct Daemon {
     config: Arc<RwLock<Config>>,
@@ -32,11 +32,11 @@ impl Daemon {
     pub async fn new(config: Config, log_buf: Arc<LogBuffer>) -> Result<Self> {
         let audit = AuditLogger::new(&config.audit.log_path).await?;
         let client = AiClient::new(&config.ai.api_url, &config.ai.api_key)?;
-        let tools = Arc::new(ToolRegistry::new());
+        let skills = Arc::new(SkillRegistry::new());
         let timeout_minutes = config.ai.session_timeout_minutes;
         let sessions = Arc::new(SessionManager::new(
             client,
-            tools,
+            skills,
             audit.clone(),
             timeout_minutes,
         ));

@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
-use crate::tools::{ToolContext, ToolRegistry};
+use crate::tools::{SkillRegistry, ToolContext, ToolRegistry};
 use super::client::{AiClient, ChatMessage};
 
 /// An in-memory AI conversation for a single user.
@@ -53,7 +53,7 @@ impl Session {
 pub struct SessionManager {
     sessions: Mutex<Vec<Session>>,
     client: AiClient,
-    tools: Arc<ToolRegistry>,
+    skills: Arc<SkillRegistry>,
     audit: AuditLogger,
     timeout_minutes: u64,
 }
@@ -61,14 +61,14 @@ pub struct SessionManager {
 impl SessionManager {
     pub fn new(
         client: AiClient,
-        tools: Arc<ToolRegistry>,
+        skills: Arc<SkillRegistry>,
         audit: AuditLogger,
         timeout_minutes: u64,
     ) -> Self {
         Self {
             sessions: Mutex::new(vec![]),
             client,
-            tools,
+            skills,
             audit,
             timeout_minutes,
         }
@@ -119,6 +119,10 @@ impl SessionManager {
         let model = config.effective_model(user);
         let system_prompt = config.effective_system_prompt(user);
 
+        // Build a per-request tool registry (skill tools are instantiated with
+        // profile config baked in, so this must happen per-message)
+        let tools = ToolRegistry::for_profile(profile, &self.skills)?;
+
         let session_id = self.get_or_create_session_id(user, channel).await;
 
         let preview = user_message.chars().take(100).collect::<String>();
@@ -137,7 +141,7 @@ impl SessionManager {
             model: model.clone(),
         });
 
-        let tool_defs = self.tools.definitions_for(profile);
+        let tool_defs = tools.definitions_for(profile);
         let tool_context = ToolContext::from_profile(profile);
 
         // Push user message
@@ -217,11 +221,14 @@ impl SessionManager {
                 let args: serde_json::Value =
                     serde_json::from_str(&tc.function.arguments).unwrap_or_default();
 
-                let found = self.tools.find(tool_name);
+                let found = tools.find(tool_name);
 
                 // Check group-level enablement
                 let allowed = match &found {
                     Some((_, crate::tools::ToolGroup::Fs)) => profile.permissions.fs,
+                    Some((_, crate::tools::ToolGroup::Skill(skill_name))) => {
+                        profile.permissions.skills.contains_key(skill_name.as_str())
+                    }
                     None => false,
                 };
 

@@ -1,47 +1,7 @@
-[package]
-name = "opencontrol"
-version = "0.1.0"
-edition = "2021"
-
-[[bin]]
-name = "opencontrol"
-path = "src/main.rs"
-
-[dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-
-# HTTP client
-reqwest = { version = "0.12", features = ["json", "stream"] }
-
-# Telegram bot
-teloxide = { version = "0.13", features = ["macros"] }
-
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
-
-# CLI argument parsing
-clap = { version = "4", features = ["derive"] }
-
-# Logging / tracing
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Error handling
-anyhow = "1"
-thiserror = "1"
-
-# Time
-chrono = { version = "0.4", features = ["serde"] }
-
-# Async utilities
-futures = "0.3"
-tokio-stream = "0.1"
-
-# UUID for session IDs
-uuid = { version = "1", features = ["v4"] }
-
-# Path canonicalization helper
-dunce = "1"
+[workspace]
+members = [
+    "opencontrol",
+    "opencontrol-sdk",
+    "opencontrol-github",
+]
+resolver = "2"

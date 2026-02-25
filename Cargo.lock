@@ -1128,6 +1128,8 @@ dependencies = [
  "clap",
  "dunce",
  "futures",
+ "opencontrol-github",
+ "opencontrol-sdk",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -1139,6 +1141,30 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "opencontrol-github"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "opencontrol-sdk",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "opencontrol-sdk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
 ]
 
 [[package]]
