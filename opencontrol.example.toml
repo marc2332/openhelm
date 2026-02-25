@@ -1,0 +1,33 @@
+# OpenControl configuration file
+# Copy this to $HOME/opencontrol.toml and fill in your values.
+
+[daemon]
+socket_path = "/tmp/opencontrol.sock"
+log_level = "info"
+
+[ai]
+# OpenAI-compatible endpoint — use https://openrouter.ai/api/v1 for OpenRouter
+api_url = "https://api.openai.com/v1"
+api_key = "sk-..."
+model = "gpt-4o"
+system_prompt = """
+You are a helpful assistant with access to tools on the host system.
+Use them carefully and only when necessary.
+"""
+# Minutes of inactivity before a conversation is automatically reset
+session_timeout_minutes = 30
+
+[telegram]
+bot_token = "..."
+
+# Paired users are added here automatically via `opencontrol pair approve`.
+# You can also add them manually.
+[[telegram.users]]
+telegram_id = 123456789
+name = "Alice"
+permissions = ["fs"]
+fs_allowed_paths = ["/home/alice/projects", "/tmp"]
+# model = "gpt-4o-mini"  # optional per-user model override
+
+[audit]
+log_path = "/home/alice/.local/share/opencontrol/audit.log"
