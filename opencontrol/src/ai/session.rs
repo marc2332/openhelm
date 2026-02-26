@@ -165,15 +165,18 @@ impl SessionManager {
             let finish_reason = resp.finish_reason.as_deref().unwrap_or("stop");
             let tool_calls = resp.tool_calls.as_deref().unwrap_or(&[]);
 
-            // Always push assistant message to history (even if only tool calls)
-            let text = resp.content.as_deref().unwrap_or_else(|| "[tool call]");
-            self.sessions
-                .write()
-                .await
-                .get_mut(&user.telegram_id)
-                .expect("session must exist")
-                .history
-                .push(Message::assistant(text));
+            // Add assistant response to history only if there's actual text
+            if let Some(text) = resp.content.as_deref() {
+                if !text.is_empty() && text != "[tool call]" {
+                    self.sessions
+                        .write()
+                        .await
+                        .get_mut(&user.telegram_id)
+                        .expect("session must exist")
+                        .history
+                        .push(Message::assistant(text));
+                }
+            }
 
             if finish_reason == "stop" || tool_calls.is_empty() {
                 self.sessions
