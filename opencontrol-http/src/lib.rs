@@ -2,21 +2,27 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use opencontrol_sdk::{Skill, Tool, ToolDefinition, ToolOutput};
 
-const MAX_BODY_BYTES: usize = 100 * 1024; // 100 KB
+const DEFAULT_MAX_BODY_BYTES: usize = 15 * 1024 * 1024; // 15 MB
 
-struct HttpClient(Client);
+struct HttpClient {
+    client: Client,
+    max_body_bytes: usize,
+}
 
 impl HttpClient {
-    fn new() -> Self {
+    fn new(max_body_bytes: usize) -> Self {
         let client = Client::builder()
             .user_agent("opencontrol-http/0.1.0")
             .build()
             .expect("Failed to build HTTP client");
-        Self(client)
+        Self {
+            client,
+            max_body_bytes,
+        }
     }
 }
 
@@ -26,10 +32,7 @@ fn url_arg(args: &Value) -> Result<&str> {
         .context("Missing required 'url' argument")
 }
 
-fn apply_headers(
-    mut builder: reqwest::RequestBuilder,
-    args: &Value,
-) -> reqwest::RequestBuilder {
+fn apply_headers(mut builder: reqwest::RequestBuilder, args: &Value) -> reqwest::RequestBuilder {
     if let Some(headers) = args.get("headers").and_then(|h| h.as_object()) {
         for (key, value) in headers {
             if let Some(v) = value.as_str() {
@@ -40,7 +43,12 @@ fn apply_headers(
     builder
 }
 
-fn format_response(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap, body: &str) -> String {
+fn format_response(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+    max_body_bytes: usize,
+) -> String {
     let mut out = format!("Status: {}\nHeaders:\n", status);
     for (name, value) in headers {
         if let Ok(v) = value.to_str() {
@@ -48,12 +56,12 @@ fn format_response(status: reqwest::StatusCode, headers: &reqwest::header::Heade
         }
     }
     out.push('\n');
-    if body.len() > MAX_BODY_BYTES {
-        out.push_str(&body[..MAX_BODY_BYTES]);
+    if body.len() > max_body_bytes {
+        out.push_str(&body[..max_body_bytes]);
         out.push_str(&format!(
             "\n\n--- truncated ({} bytes total, showing first {}) ---",
             body.len(),
-            MAX_BODY_BYTES
+            max_body_bytes
         ));
     } else {
         out.push_str(body);
@@ -61,7 +69,10 @@ fn format_response(status: reqwest::StatusCode, headers: &reqwest::header::Heade
     out
 }
 
-fn format_head_response(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> String {
+fn format_head_response(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> String {
     let mut out = format!("Status: {}\nHeaders:\n", status);
     for (name, value) in headers {
         if let Ok(v) = value.to_str() {
@@ -105,15 +116,18 @@ impl Tool for HttpGetTool {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let url = url_arg(args)?;
-            let builder = apply_headers(self.0 .0.get(url), args);
+            let builder = apply_headers(self.0.client.get(url), args);
             let response = builder.send().await.context("HTTP GET request failed")?;
             let status = response.status();
             let headers = response.headers().clone();
-            let body = response.text().await.context("Failed to read response body")?;
+            let body = response
+                .text()
+                .await
+                .context("Failed to read response body")?;
 
             Ok(ToolOutput {
                 success: status.is_success(),
-                output: format_response(status, &headers, &body),
+                output: format_response(status, &headers, &body, self.0.max_body_bytes),
             })
         })
     }
@@ -155,18 +169,21 @@ impl Tool for HttpPostTool {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let url = url_arg(args)?;
-            let mut builder = apply_headers(self.0 .0.post(url), args);
+            let mut builder = apply_headers(self.0.client.post(url), args);
             if let Some(body) = args.get("body") {
                 builder = builder.json(body);
             }
             let response = builder.send().await.context("HTTP POST request failed")?;
             let status = response.status();
             let headers = response.headers().clone();
-            let body = response.text().await.context("Failed to read response body")?;
+            let body = response
+                .text()
+                .await
+                .context("Failed to read response body")?;
 
             Ok(ToolOutput {
                 success: status.is_success(),
-                output: format_response(status, &headers, &body),
+                output: format_response(status, &headers, &body, self.0.max_body_bytes),
             })
         })
     }
@@ -208,18 +225,21 @@ impl Tool for HttpPutTool {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let url = url_arg(args)?;
-            let mut builder = apply_headers(self.0 .0.put(url), args);
+            let mut builder = apply_headers(self.0.client.put(url), args);
             if let Some(body) = args.get("body") {
                 builder = builder.json(body);
             }
             let response = builder.send().await.context("HTTP PUT request failed")?;
             let status = response.status();
             let headers = response.headers().clone();
-            let body = response.text().await.context("Failed to read response body")?;
+            let body = response
+                .text()
+                .await
+                .context("Failed to read response body")?;
 
             Ok(ToolOutput {
                 success: status.is_success(),
-                output: format_response(status, &headers, &body),
+                output: format_response(status, &headers, &body, self.0.max_body_bytes),
             })
         })
     }
@@ -261,18 +281,21 @@ impl Tool for HttpPatchTool {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let url = url_arg(args)?;
-            let mut builder = apply_headers(self.0 .0.patch(url), args);
+            let mut builder = apply_headers(self.0.client.patch(url), args);
             if let Some(body) = args.get("body") {
                 builder = builder.json(body);
             }
             let response = builder.send().await.context("HTTP PATCH request failed")?;
             let status = response.status();
             let headers = response.headers().clone();
-            let body = response.text().await.context("Failed to read response body")?;
+            let body = response
+                .text()
+                .await
+                .context("Failed to read response body")?;
 
             Ok(ToolOutput {
                 success: status.is_success(),
-                output: format_response(status, &headers, &body),
+                output: format_response(status, &headers, &body, self.0.max_body_bytes),
             })
         })
     }
@@ -310,15 +333,18 @@ impl Tool for HttpDeleteTool {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let url = url_arg(args)?;
-            let builder = apply_headers(self.0 .0.delete(url), args);
+            let builder = apply_headers(self.0.client.delete(url), args);
             let response = builder.send().await.context("HTTP DELETE request failed")?;
             let status = response.status();
             let headers = response.headers().clone();
-            let body = response.text().await.context("Failed to read response body")?;
+            let body = response
+                .text()
+                .await
+                .context("Failed to read response body")?;
 
             Ok(ToolOutput {
                 success: status.is_success(),
-                output: format_response(status, &headers, &body),
+                output: format_response(status, &headers, &body, self.0.max_body_bytes),
             })
         })
     }
@@ -356,7 +382,7 @@ impl Tool for HttpHeadTool {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         Box::pin(async move {
             let url = url_arg(args)?;
-            let builder = apply_headers(self.0 .0.head(url), args);
+            let builder = apply_headers(self.0.client.head(url), args);
             let response = builder.send().await.context("HTTP HEAD request failed")?;
             let status = response.status();
             let headers = response.headers().clone();
@@ -378,8 +404,14 @@ impl Skill for HttpSkill {
         "http"
     }
 
-    fn build_tools(&self, _config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>> {
-        let client = Arc::new(HttpClient::new());
+    fn build_tools(&self, config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>> {
+        let max_body_bytes = config
+            .and_then(|v| v.get("max_body_bytes"))
+            .and_then(|v| v.as_integer())
+            .map(|v| v as usize)
+            .unwrap_or(DEFAULT_MAX_BODY_BYTES);
+
+        let client = Arc::new(HttpClient::new(max_body_bytes));
 
         Ok(vec![
             Box::new(HttpGetTool(client.clone())),
