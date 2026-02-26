@@ -28,6 +28,7 @@ reqwest = { version = "0.12", features = [
 
 # Telegram bot
 teloxide = { version = "0.13", features = ["macros"] }
+telegram-markdown-v2 = "0.1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

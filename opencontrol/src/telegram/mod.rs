@@ -2,7 +2,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::Utc;
-use teloxide::{prelude::*, types::ChatAction, utils::command::BotCommands};
+use telegram_markdown_v2::convert;
+use teloxide::{
+    prelude::*,
+    types::{ChatAction, ParseMode},
+    utils::command::BotCommands,
+};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
@@ -240,14 +245,31 @@ async fn message_handler(
         .send_message(&user, Channel::Telegram, &text, &config_snapshot)
         .await
     {
-        Ok(reply) => {
-            for chunk in split_message(&reply, 4096) {
-                bot.send_message(msg.chat.id, chunk).await?;
+        Ok(reply) => match convert(&reply) {
+            Ok(converted) => {
+                for chunk in split_message(&converted, 4096) {
+                    if !chunk.is_empty() {
+                        bot.send_message(msg.chat.id, chunk)
+                            .parse_mode(ParseMode::MarkdownV2)
+                            .await?;
+                    }
+                }
             }
-        }
+            Err(e) => {
+                warn!(error = %e, "Failed to convert markdown, sending as plain text");
+                for chunk in split_message(&reply, 4096) {
+                    if !chunk.is_empty() {
+                        bot.send_message(msg.chat.id, chunk).await?;
+                    }
+                }
+            }
+        },
         Err(err) => {
             error!(error = %err, user_id = user_id, "AI session error");
-            bot.send_message(msg.chat.id, format!("Error: {}", err))
+            let converted = convert(&format!("Error: {}", err))
+                .unwrap_or_else(|_| "Error: Something went wrong.".to_string());
+            bot.send_message(msg.chat.id, converted)
+                .parse_mode(ParseMode::MarkdownV2)
                 .await?;
         }
     }
