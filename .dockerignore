@@ -1,0 +1,8 @@
+target/
+.git/
+.gitignore
+*.md
+opencontrol.toml
+opencontrol.example.toml
+opencontrol.minimal.example.toml
+justfile
