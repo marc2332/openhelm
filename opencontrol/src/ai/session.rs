@@ -76,12 +76,12 @@ impl SessionManager {
     async fn ensure_session(&self, user: &TelegramUser, channel: Channel) -> bool {
         {
             let mut sessions = self.sessions.write().await;
-            if let Some(s) = sessions.get_mut(&user.telegram_id) {
-                if s.is_timed_out() {
+            if let Some(session) = sessions.get_mut(&user.telegram_id) {
+                if session.is_timed_out() {
                     info!(user_id = user.telegram_id, "Session timed out, resetting");
-                    s.reset();
+                    session.reset();
                 }
-                s.touch();
+                session.touch();
                 return false;
             }
         }
@@ -165,17 +165,18 @@ impl SessionManager {
             let finish_reason = resp.finish_reason.as_deref().unwrap_or("stop");
             let tool_calls = resp.tool_calls.as_deref().unwrap_or(&[]);
 
-            // Add assistant response to history only if there's actual text
-            if let Some(text) = resp.content.as_deref() {
-                if !text.is_empty() && text != "[tool call]" {
-                    self.sessions
-                        .write()
-                        .await
-                        .get_mut(&user.telegram_id)
-                        .expect("session must exist")
-                        .history
-                        .push(Message::assistant(text));
-                }
+            if let Some(text) = resp
+                .content
+                .as_deref()
+                .filter(|text| !text.is_empty() && *text != "[tool call]")
+            {
+                self.sessions
+                    .write()
+                    .await
+                    .get_mut(&user.telegram_id)
+                    .expect("session must exist")
+                    .history
+                    .push(Message::assistant(text));
             }
 
             if finish_reason == "stop" || tool_calls.is_empty() {
@@ -247,8 +248,8 @@ impl SessionManager {
                             });
                             output.output
                         }
-                        Err(e) => {
-                            let err = e.to_string();
+                        Err(err) => {
+                            let err = err.to_string();
                             self.audit.log(AuditEvent::ToolResult {
                                 user_id: user.telegram_id,
                                 session_id: user.telegram_id.to_string(),
@@ -276,15 +277,15 @@ impl SessionManager {
     }
 
     pub async fn reset_session(&self, user_id: i64) {
-        if let Some(s) = self.sessions.write().await.get_mut(&user_id) {
-            s.reset();
+        if let Some(session) = self.sessions.write().await.get_mut(&user_id) {
+            session.reset();
         }
     }
 
     pub async fn prune_timed_out(&self) -> usize {
         let mut sessions = self.sessions.write().await;
         let before = sessions.len();
-        sessions.retain(|_, s| !s.is_timed_out());
+        sessions.retain(|_, session| !session.is_timed_out());
         before - sessions.len()
     }
 
@@ -293,7 +294,7 @@ impl SessionManager {
             .read()
             .await
             .values()
-            .filter(|s| !s.is_timed_out())
+            .filter(|session| !session.is_timed_out())
             .count()
     }
 }

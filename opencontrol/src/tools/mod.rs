@@ -84,9 +84,9 @@ impl SkillRegistry {
         for skill in &self.skills {
             if let Some(skill_config) = profile.permissions.skills.get(skill.name()) {
                 let built = skill.build_tools(Some(skill_config)).await?;
-                for t in built {
-                    name_map.insert(t.name().to_string(), skill.name());
-                    tools.push(Box::new(SdkToolAdapter(t)));
+                for sdk_tool in built {
+                    name_map.insert(sdk_tool.name().to_string(), skill.name());
+                    tools.push(Box::new(SdkToolAdapter(sdk_tool)));
                 }
             }
         }
@@ -123,22 +123,29 @@ impl ToolRegistry {
     }
 
     pub fn definitions_for(&self, profile: &Profile) -> Vec<ToolDefinition> {
-        let mut defs = vec![];
-        if profile.permissions.fs {
-            defs.extend(self.fs_tools.iter().map(|t| t.definition()));
-        }
-        defs.extend(self.skill_tools.iter().map(|t| t.definition()));
-        defs
+        let fs_defs = profile
+            .permissions
+            .fs
+            .then(|| self.fs_tools.iter().map(|tool| tool.definition()))
+            .into_iter()
+            .flatten();
+        let skill_defs = self.skill_tools.iter().map(|tool| tool.definition());
+        fs_defs.chain(skill_defs).collect()
     }
 
     pub fn find(&self, name: &str) -> Option<(&dyn Tool, ToolGroup)> {
-        if let Some(t) = self.fs_tools.iter().find(|t| t.name() == name) {
-            return Some((t.as_ref(), ToolGroup::Fs));
-        }
-        if let Some(t) = self.skill_tools.iter().find(|t| t.name() == name) {
-            let skill_name = self.skill_tool_map[name];
-            return Some((t.as_ref(), ToolGroup::Skill(skill_name)));
-        }
-        None
+        self.fs_tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .map(|tool| (tool.as_ref(), ToolGroup::Fs))
+            .or_else(|| {
+                self.skill_tools
+                    .iter()
+                    .find(|tool| tool.name() == name)
+                    .map(|tool| {
+                        let skill_name = self.skill_tool_map[name];
+                        (tool.as_ref(), ToolGroup::Skill(skill_name))
+                    })
+            })
     }
 }

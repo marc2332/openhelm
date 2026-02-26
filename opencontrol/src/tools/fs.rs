@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 
 use super::{Tool, ToolContext, ToolOutput};
@@ -34,7 +34,7 @@ fn resolve_path(raw_path: &str) -> Result<PathBuf> {
     bail!("Invalid path: {}", path.display());
 }
 
-fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<()> {
+fn check_allowed(path: &Path, allowed: &[String], operation: &str) -> Result<()> {
     if allowed.is_empty() {
         bail!(
             "Operation '{}' is not permitted: no paths are configured for this operation in the profile. \

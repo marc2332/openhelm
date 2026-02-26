@@ -71,22 +71,14 @@ impl Daemon {
             start_time: self.start_time,
         };
 
-        let config_arc = self.config.clone();
-        let sessions_arc = self.sessions.clone();
-        let audit_arc = self.audit.clone();
-        let pending_arc = self.pending_pairs.clone();
-        let bot_connected_arc = self.bot_connected.clone();
-        let log_buf_arc = self.log_buf.clone();
-        let start_time = self.start_time;
-
         tokio::spawn(async move {
-            if let Err(e) = run_bot(bot_state).await {
-                error!(error = %e, "Telegram bot error");
+            if let Err(err) = run_bot(bot_state).await {
+                error!(error = %err, "Telegram bot error");
             }
         });
 
         tokio::spawn({
-            let sessions = sessions_arc.clone();
+            let sessions = self.sessions.clone();
             async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -98,29 +90,39 @@ impl Daemon {
             }
         });
 
+        let config = self.config;
+        let sessions = self.sessions;
+        let audit = self.audit;
+        let pending = self.pending_pairs;
+        let bot_connected = self.bot_connected;
+        let log_buf = self.log_buf;
+        let start_time = self.start_time;
+
         let ipc_handle = tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, _)) => {
-                        let config = config_arc.clone();
-                        let sessions = sessions_arc.clone();
-                        let audit = audit_arc.clone();
-                        let pending = pending_arc.clone();
-                        let bot_connected = bot_connected_arc.clone();
-                        let log_buf = log_buf_arc.clone();
-                        tokio::spawn(handle_ipc_connection(
-                            stream,
-                            config,
-                            sessions,
-                            audit,
-                            pending,
-                            bot_connected,
-                            log_buf,
-                            start_time,
-                        ));
+                        tokio::spawn({
+                            let config = config.clone();
+                            let sessions = sessions.clone();
+                            let audit = audit.clone();
+                            let pending = pending.clone();
+                            let bot_connected = bot_connected.clone();
+                            let log_buf = log_buf.clone();
+                            handle_ipc_connection(
+                                stream,
+                                config,
+                                sessions,
+                                audit,
+                                pending,
+                                bot_connected,
+                                log_buf,
+                                start_time,
+                            )
+                        });
                     }
-                    Err(e) => {
-                        error!(error = %e, "Failed to accept IPC connection");
+                    Err(err) => {
+                        error!(error = %err, "Failed to accept IPC connection");
                     }
                 }
             }
@@ -146,9 +148,9 @@ async fn handle_ipc_connection(
     start_time: Instant,
 ) {
     let req = match recv_request(&mut stream).await {
-        Ok(r) => r,
-        Err(e) => {
-            warn!(error = %e, "Failed to read IPC request");
+        Ok(request) => request,
+        Err(err) => {
+            warn!(error = %err, "Failed to read IPC request");
             return;
         }
     };
@@ -165,8 +167,8 @@ async fn handle_ipc_connection(
     )
     .await;
 
-    if let Err(e) = send_response(&mut stream, &resp).await {
-        warn!(error = %e, "Failed to send IPC response");
+    if let Err(err) = send_response(&mut stream, &resp).await {
+        warn!(error = %err, "Failed to send IPC response");
     }
 }
 
@@ -204,25 +206,25 @@ async fn dispatch(
         } => {
             {
                 let cfg = config.read().await;
-                if let Err(e) = cfg.require_profile(&profile) {
+                if let Err(err) = cfg.require_profile(&profile) {
                     return IpcResponse::Error {
-                        message: e.to_string(),
+                        message: err.to_string(),
                     };
                 }
             }
 
             let pair_info = {
                 let pairs = pending.read().await;
-                pairs.iter().find(|p| p.telegram_id == telegram_id).cloned()
+                pairs
+                    .iter()
+                    .find(|pair| pair.telegram_id == telegram_id)
+                    .cloned()
             };
 
-            let pair = match pair_info {
-                Some(p) => p,
-                None => {
-                    return IpcResponse::Error {
-                        message: format!("No pending pairing request from {}", telegram_id),
-                    };
-                }
+            let Some(pair) = pair_info else {
+                return IpcResponse::Error {
+                    message: format!("No pending pairing request from {}", telegram_id),
+                };
             };
 
             let new_user = TelegramUser {
@@ -233,11 +235,13 @@ async fn dispatch(
 
             {
                 let mut cfg = config.write().await;
-                cfg.telegram.users.retain(|u| u.telegram_id != telegram_id);
+                cfg.telegram
+                    .users
+                    .retain(|user| user.telegram_id != telegram_id);
                 cfg.telegram.users.push(new_user);
-                if let Err(e) = cfg.save().await {
+                if let Err(err) = cfg.save().await {
                     return IpcResponse::Error {
-                        message: format!("Failed to save config: {}", e),
+                        message: format!("Failed to save config: {}", err),
                     };
                 }
             }
@@ -245,7 +249,7 @@ async fn dispatch(
             pending
                 .write()
                 .await
-                .retain(|p| p.telegram_id != telegram_id);
+                .retain(|pair| pair.telegram_id != telegram_id);
 
             audit.log(AuditEvent::PairingDecision {
                 telegram_id,
@@ -266,7 +270,7 @@ async fn dispatch(
             let removed = {
                 let mut pairs = pending.write().await;
                 let before = pairs.len();
-                pairs.retain(|p| p.telegram_id != telegram_id);
+                pairs.retain(|pair| pair.telegram_id != telegram_id);
                 pairs.len() < before
             };
 
@@ -293,10 +297,10 @@ async fn dispatch(
                 .telegram
                 .users
                 .iter()
-                .map(|u| UserInfo {
-                    telegram_id: u.telegram_id,
-                    name: u.name.clone(),
-                    profile: u.profile.clone(),
+                .map(|user| UserInfo {
+                    telegram_id: user.telegram_id,
+                    name: user.name.clone(),
+                    profile: user.profile.clone(),
                 })
                 .collect();
             IpcResponse::UsersList { users }
@@ -306,12 +310,14 @@ async fn dispatch(
             let removed = {
                 let mut cfg = config.write().await;
                 let before = cfg.telegram.users.len();
-                cfg.telegram.users.retain(|u| u.telegram_id != telegram_id);
+                cfg.telegram
+                    .users
+                    .retain(|user| user.telegram_id != telegram_id);
                 let removed = cfg.telegram.users.len() < before;
                 if removed {
-                    if let Err(e) = cfg.save().await {
+                    if let Err(err) = cfg.save().await {
                         return IpcResponse::Error {
-                            message: format!("Failed to save config: {}", e),
+                            message: format!("Failed to save config: {}", err),
                         };
                     }
                 }
@@ -340,12 +346,12 @@ async fn dispatch(
             let profiles = cfg
                 .profiles
                 .iter()
-                .map(|(name, p)| ProfileInfo {
+                .map(|(name, profile)| ProfileInfo {
                     name: name.clone(),
-                    model: p.model.clone(),
-                    has_custom_prompt: p.system_prompt.is_some(),
-                    fs_enabled: p.permissions.fs,
-                    fs: p.fs.clone(),
+                    model: profile.model.clone(),
+                    has_custom_prompt: profile.system_prompt.is_some(),
+                    fs_enabled: profile.permissions.fs,
+                    fs: profile.fs.clone(),
                 })
                 .collect();
             IpcResponse::ProfilesList { profiles }
@@ -353,9 +359,9 @@ async fn dispatch(
 
         IpcRequest::Chat { message, profile } => {
             let cfg_snapshot = config.read().await.clone();
-            if let Err(e) = cfg_snapshot.require_profile(&profile) {
+            if let Err(err) = cfg_snapshot.require_profile(&profile) {
                 return IpcResponse::Error {
-                    message: e.to_string(),
+                    message: err.to_string(),
                 };
             }
 
@@ -370,8 +376,8 @@ async fn dispatch(
                 .await
             {
                 Ok(reply) => IpcResponse::ChatReply { message: reply },
-                Err(e) => IpcResponse::Error {
-                    message: e.to_string(),
+                Err(err) => IpcResponse::Error {
+                    message: err.to_string(),
                 },
             }
         }

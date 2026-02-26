@@ -113,8 +113,8 @@ struct LogBufferWriter(Arc<LogBuffer>);
 
 impl std::io::Write for LogBufferWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if let Ok(s) = std::str::from_utf8(buf) {
-            let line = s.trim_end_matches('\n').to_string();
+        if let Ok(text) = std::str::from_utf8(buf) {
+            let line = text.trim_end_matches('\n').to_string();
             if !line.is_empty() {
                 self.0.push(line);
             }
@@ -274,8 +274,8 @@ async fn cmd_setup(
         }
     });
 
-    let api_key = if let Some(v) = api_key {
-        v
+    let api_key = if let Some(key) = api_key {
+        key
     } else {
         let input: String = Input::new().with_prompt("API Key (required)").interact()?;
         if input.is_empty() {
@@ -347,7 +347,7 @@ async fn cmd_setup(
         };
 
         let read = fs_read
-            .map(|v| v.into_iter().map(expand_tilde).collect())
+            .map(|paths| paths.into_iter().map(expand_tilde).collect())
             .unwrap_or_else(|| {
                 if has_cli_args {
                     vec![]
@@ -359,15 +359,15 @@ async fn cmd_setup(
                         .unwrap();
                     input
                         .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
+                        .map(|part| part.trim().to_string())
+                        .filter(|part| !part.is_empty())
                         .map(expand_tilde)
                         .collect()
                 }
             });
 
         let write = fs_write
-            .map(|v| v.into_iter().map(expand_tilde).collect())
+            .map(|paths| paths.into_iter().map(expand_tilde).collect())
             .unwrap_or_else(|| {
                 if has_cli_args {
                     vec![]
@@ -379,15 +379,15 @@ async fn cmd_setup(
                         .unwrap();
                     input
                         .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
+                        .map(|part| part.trim().to_string())
+                        .filter(|part| !part.is_empty())
                         .map(expand_tilde)
                         .collect()
                 }
             });
 
         let read_dir = fs_list
-            .map(|v| v.into_iter().map(expand_tilde).collect())
+            .map(|paths| paths.into_iter().map(expand_tilde).collect())
             .unwrap_or_else(|| {
                 if has_cli_args {
                     vec![]
@@ -399,15 +399,15 @@ async fn cmd_setup(
                         .unwrap();
                     input
                         .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
+                        .map(|part| part.trim().to_string())
+                        .filter(|part| !part.is_empty())
                         .map(expand_tilde)
                         .collect()
                 }
             });
 
         let mkdir = fs_mkdir
-            .map(|v| v.into_iter().map(expand_tilde).collect())
+            .map(|paths| paths.into_iter().map(expand_tilde).collect())
             .unwrap_or_else(|| {
                 if has_cli_args {
                     vec![]
@@ -419,8 +419,8 @@ async fn cmd_setup(
                         .unwrap();
                     input
                         .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
+                        .map(|part| part.trim().to_string())
+                        .filter(|part| !part.is_empty())
                         .map(expand_tilde)
                         .collect()
                 }
@@ -500,15 +500,15 @@ async fn cmd_start(log_buf: Arc<LogBuffer>) -> Result<()> {
         .await
         .context("Failed to load config. Run `opencontrol setup` first.")?;
     info!("Starting daemon");
-    let d = daemon::Daemon::new(cfg, log_buf).await?;
-    d.run().await
+    let daemon = daemon::Daemon::new(cfg, log_buf).await?;
+    daemon.run().await
 }
 
 async fn cmd_stop() -> Result<()> {
     let cfg = config::Config::load().await.ok();
     match client_call(socket_path(cfg.as_ref()), &IpcRequest::Shutdown).await {
         Ok(_) => println!("Daemon stopped"),
-        Err(e) => bail!("Daemon is not running: {}", e),
+        Err(err) => bail!("Daemon is not running: {}", err),
     }
     Ok(())
 }
@@ -538,9 +538,9 @@ async fn cmd_status() -> Result<()> {
             );
         }
         Ok(_) => bail!("Unexpected response from daemon"),
-        Err(e) => {
+        Err(err) => {
             println!("Daemon:           not running");
-            println!("  ({})", e);
+            println!("  ({})", err);
         }
     }
     Ok(())
@@ -551,7 +551,7 @@ async fn cmd_restart() -> Result<()> {
         .args(["--user", "restart", "opencontrol"])
         .status();
     match result {
-        Ok(s) if s.success() => println!("opencontrol restarted (systemd)"),
+        Ok(status) if status.success() => println!("opencontrol restarted (systemd)"),
         _ => bail!(
             "Restart is only supported when running as a systemd service.\n\
             Install with `opencontrol install-service`, or stop and re-run `opencontrol start`."
@@ -573,8 +573,8 @@ async fn cmd_logs(follow: bool, lines: usize) -> Result<()> {
             }
             total
         }
-        Err(e) => {
-            eprintln!("Daemon is not running: {}", e);
+        Err(err) => {
+            eprintln!("Daemon is not running: {}", err);
             eprintln!(
                 "Hint: if running under systemd try: journalctl --user -u opencontrol.service -f"
             );
@@ -621,10 +621,10 @@ async fn cmd_pair_list() -> Result<()> {
                     "Telegram ID", "Username", "Requested At"
                 );
                 println!("{}", "-".repeat(60));
-                for p in &pending {
+                for pair in &pending {
                     println!(
                         "{:<15} {:<20} {}",
-                        p.telegram_id, p.username, p.requested_at
+                        pair.telegram_id, pair.username, pair.requested_at
                     );
                 }
                 println!("\nApprove:  opencontrol pair approve <telegram_id> --profile <name>");
@@ -681,8 +681,11 @@ async fn cmd_users_list() -> Result<()> {
             } else {
                 println!("{:<15} {:<20} {}", "Telegram ID", "Name", "Profile");
                 println!("{}", "-".repeat(50));
-                for u in &users {
-                    println!("{:<15} {:<20} {}", u.telegram_id, u.name, u.profile);
+                for user in &users {
+                    println!(
+                        "{:<15} {:<20} {}",
+                        user.telegram_id, user.name, user.profile
+                    );
                 }
             }
         }
@@ -716,31 +719,29 @@ async fn cmd_profiles_list() -> Result<()> {
                 println!("Add a [profiles.<name>] section to opencontrol.toml.");
                 return Ok(());
             }
-            profiles.sort_by(|a, b| a.name.cmp(&b.name));
-            for p in &profiles {
-                println!("profile: {}", p.name);
-                if let Some(m) = &p.model {
-                    println!("  model:         {}", m);
+            profiles.sort_by(|left, right| left.name.cmp(&right.name));
+            for profile in &profiles {
+                println!("profile: {}", profile.name);
+                if let Some(model) = &profile.model {
+                    println!("  model:         {}", model);
                 }
-                println!("  custom prompt: {}", p.has_custom_prompt);
+                println!("  custom prompt: {}", profile.has_custom_prompt);
                 println!("  permissions:");
-                println!("    fs: {}", p.fs_enabled);
-                if p.fs_enabled {
-                    if let Some(fs) = &p.fs {
-                        let fmt = |v: &Vec<String>| {
-                            if v.is_empty() {
-                                "(none)".to_string()
-                            } else {
-                                v.join(", ")
-                            }
-                        };
-                        println!("      read:     {}", fmt(&fs.read));
-                        println!("      read_dir: {}", fmt(&fs.read_dir));
-                        println!("      write:    {}", fmt(&fs.write));
-                        println!("      mkdir:    {}", fmt(&fs.mkdir));
-                    } else {
-                        println!("      (no [fs] table — all paths denied)");
-                    }
+                println!("    fs: {}", profile.fs_enabled);
+                if let Some(fs) = profile.fs.as_ref().filter(|_| profile.fs_enabled) {
+                    let fmt_paths = |paths: &Vec<String>| {
+                        if paths.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                            paths.join(", ")
+                        }
+                    };
+                    println!("      read:     {}", fmt_paths(&fs.read));
+                    println!("      read_dir: {}", fmt_paths(&fs.read_dir));
+                    println!("      write:    {}", fmt_paths(&fs.write));
+                    println!("      mkdir:    {}", fmt_paths(&fs.mkdir));
+                } else if profile.fs_enabled {
+                    println!("      (no [fs] table — all paths denied)");
                 }
                 println!();
             }
@@ -794,14 +795,15 @@ async fn cmd_audit(follow: bool, filter_user: Option<i64>, lines: usize) -> Resu
 }
 
 fn print_audit_line(line: &str, filter_user: Option<i64>) {
-    if let Some(uid) = filter_user {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-            if val.get("user_id").and_then(|v| v.as_i64()) != Some(uid) {
-                return;
-            }
-        }
+    let dominated = filter_user.is_some_and(|uid| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .and_then(|val| val.get("user_id").and_then(|id| id.as_i64()))
+            != Some(uid)
+    });
+    if !dominated {
+        println!("{}", line);
     }
-    println!("{}", line);
 }
 
 async fn cmd_chat(profile: String) -> Result<()> {
@@ -906,7 +908,7 @@ async fn cmd_install_service() -> Result<()> {
 }
 
 fn socket_path(cfg: Option<&config::Config>) -> &str {
-    cfg.map(|c| c.daemon.socket_path.as_str())
+    cfg.map(|config| config.daemon.socket_path.as_str())
         .unwrap_or("/tmp/opencontrol.sock")
 }
 

@@ -34,50 +34,46 @@ fn url_arg(args: &Value) -> Result<&str> {
 }
 
 fn apply_headers(mut builder: reqwest::RequestBuilder, args: &Value) -> reqwest::RequestBuilder {
-    if let Some(headers) = args.get("headers").and_then(|h| h.as_object()) {
+    if let Some(headers) = args.get("headers").and_then(|header| header.as_object()) {
         for (key, value) in headers {
-            if let Some(v) = value.as_str() {
-                builder = builder.header(key.as_str(), v);
+            if let Some(val) = value.as_str() {
+                builder = builder.header(key.as_str(), val);
             }
         }
     }
     builder
 }
 
+fn format_headers(headers: &reqwest::header::HeaderMap) -> String {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|val| format!("  {}: {}\n", name, val))
+        })
+        .collect()
+}
+
 fn format_response(
     status: reqwest::StatusCode,
     headers: &reqwest::header::HeaderMap,
-    body: &str,
+    body: Option<&str>,
     max_body_bytes: usize,
 ) -> String {
-    let mut out = format!("Status: {}\nHeaders:\n", status);
-    for (name, value) in headers {
-        if let Ok(v) = value.to_str() {
-            out.push_str(&format!("  {}: {}\n", name, v));
-        }
-    }
-    out.push('\n');
-    if body.len() > max_body_bytes {
-        out.push_str(&body[..max_body_bytes]);
-        out.push_str(&format!(
-            "\n\n--- truncated ({} bytes total, showing first {}) ---",
-            body.len(),
-            max_body_bytes
-        ));
-    } else {
-        out.push_str(body);
-    }
-    out
-}
-
-fn format_head_response(
-    status: reqwest::StatusCode,
-    headers: &reqwest::header::HeaderMap,
-) -> String {
-    let mut out = format!("Status: {}\nHeaders:\n", status);
-    for (name, value) in headers {
-        if let Ok(v) = value.to_str() {
-            out.push_str(&format!("  {}: {}\n", name, v));
+    let mut out = format!("Status: {}\nHeaders:\n{}", status, format_headers(headers));
+    if let Some(body) = body {
+        out.push('\n');
+        if body.len() > max_body_bytes {
+            out.push_str(&body[..max_body_bytes]);
+            out.push_str(&format!(
+                "\n\n--- truncated ({} bytes total, showing first {}) ---",
+                body.len(),
+                max_body_bytes
+            ));
+        } else {
+            out.push_str(body);
         }
     }
     out
@@ -123,7 +119,7 @@ impl Tool for HttpGetTool {
 
         Ok(ToolOutput {
             success: status.is_success(),
-            output: format_response(status, &headers, &body, self.0.max_body_bytes),
+            output: format_response(status, &headers, Some(&body), self.0.max_body_bytes),
         })
     }
 }
@@ -175,7 +171,7 @@ impl Tool for HttpPostTool {
 
         Ok(ToolOutput {
             success: status.is_success(),
-            output: format_response(status, &headers, &body, self.0.max_body_bytes),
+            output: format_response(status, &headers, Some(&body), self.0.max_body_bytes),
         })
     }
 }
@@ -227,7 +223,7 @@ impl Tool for HttpPutTool {
 
         Ok(ToolOutput {
             success: status.is_success(),
-            output: format_response(status, &headers, &body, self.0.max_body_bytes),
+            output: format_response(status, &headers, Some(&body), self.0.max_body_bytes),
         })
     }
 }
@@ -279,7 +275,7 @@ impl Tool for HttpPatchTool {
 
         Ok(ToolOutput {
             success: status.is_success(),
-            output: format_response(status, &headers, &body, self.0.max_body_bytes),
+            output: format_response(status, &headers, Some(&body), self.0.max_body_bytes),
         })
     }
 }
@@ -324,7 +320,7 @@ impl Tool for HttpDeleteTool {
 
         Ok(ToolOutput {
             success: status.is_success(),
-            output: format_response(status, &headers, &body, self.0.max_body_bytes),
+            output: format_response(status, &headers, Some(&body), self.0.max_body_bytes),
         })
     }
 }
@@ -365,7 +361,7 @@ impl Tool for HttpHeadTool {
 
         Ok(ToolOutput {
             success: status.is_success(),
-            output: format_head_response(status, &headers),
+            output: format_response(status, &headers, None, 0),
         })
     }
 }
@@ -380,9 +376,9 @@ impl Skill for HttpSkill {
 
     async fn build_tools(&self, config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>> {
         let max_body_bytes = config
-            .and_then(|v| v.get("max_body_bytes"))
-            .and_then(|v| v.as_integer())
-            .map(|v| v as usize)
+            .and_then(|cfg| cfg.get("max_body_bytes"))
+            .and_then(|val| val.as_integer())
+            .map(|bytes| bytes as usize)
             .unwrap_or(DEFAULT_MAX_BODY_BYTES);
 
         let client = Arc::new(HttpClient::new(max_body_bytes));

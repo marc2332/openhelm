@@ -171,7 +171,7 @@ impl Config {
         self.telegram
             .users
             .iter()
-            .find(|u| u.telegram_id == telegram_id)
+            .find(|user| user.telegram_id == telegram_id)
     }
 
     /// Resolve a profile by name, returning a clear error if it doesn't exist.
@@ -180,7 +180,11 @@ impl Config {
             let defined = if self.profiles.is_empty() {
                 "(none defined)".to_string()
             } else {
-                self.profiles.keys().cloned().collect::<Vec<_>>().join(", ")
+                self.profiles
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             };
             anyhow::anyhow!(
                 "Profile '{}' not found. Defined profiles: {}",
@@ -199,7 +203,7 @@ impl Config {
     pub fn effective_model(&self, user: &TelegramUser) -> String {
         self.profiles
             .get(&user.profile)
-            .and_then(|p| p.model.clone())
+            .and_then(|profile| profile.model.clone())
             .unwrap_or_else(|| self.ai.model.clone())
     }
 
@@ -207,7 +211,7 @@ impl Config {
     pub fn effective_system_prompt(&self, user: &TelegramUser) -> String {
         self.profiles
             .get(&user.profile)
-            .and_then(|p| p.system_prompt.clone())
+            .and_then(|profile| profile.system_prompt.clone())
             .unwrap_or_else(|| self.ai.system_prompt.clone())
     }
 }

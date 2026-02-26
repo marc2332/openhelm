@@ -35,17 +35,14 @@ impl AiClient {
     ) -> Result<ChatResponse> {
         let model = self.rig_client.completion_model(model_name);
 
-        // Find the last message with text content for the prompt
         let current_message = messages
             .iter()
             .rev()
-            .filter_map(extract_text_content)
-            .next()
+            .find_map(extract_text_content)
             .context("No message content")?;
 
         let mut request = model.completion_request(current_message);
 
-        // Include history, filter out messages without text content
         let history: Vec<_> = messages
             .iter()
             .take(messages.len().saturating_sub(1))
@@ -56,31 +53,29 @@ impl AiClient {
             request = request.messages(history);
         }
 
-        if let Some(tools) = tools {
-            if !tools.is_empty() {
-                let rig_tools: Vec<_> = tools
-                    .iter()
-                    .map(|t| rig::completion::ToolDefinition {
-                        name: t.function.name.clone(),
-                        description: t.function.description.clone(),
-                        parameters: t.function.parameters.clone(),
-                    })
-                    .collect();
-                request = request.tools(rig_tools);
-            }
+        if let Some(tools) = tools.filter(|tools| !tools.is_empty()) {
+            let rig_tools: Vec<_> = tools
+                .iter()
+                .map(|tool| rig::completion::ToolDefinition {
+                    name: tool.function.name.clone(),
+                    description: tool.function.description.clone(),
+                    parameters: tool.function.parameters.clone(),
+                })
+                .collect();
+            request = request.tools(rig_tools);
         }
 
         let response = request
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Completion error: {:?}", e))?;
+            .map_err(|err| anyhow::anyhow!("Completion error: {:?}", err))?;
 
         let mut tool_calls_vec: Vec<ToolCall> = Vec::new();
         let mut content_parts: Vec<String> = Vec::new();
 
-        for c in response.choice.iter() {
-            match c {
-                AssistantContent::Text(t) => content_parts.push(t.text.clone()),
+        for choice in response.choice.iter() {
+            match choice {
+                AssistantContent::Text(text) => content_parts.push(text.text.clone()),
                 AssistantContent::ToolCall(tc) => {
                     tool_calls_vec.push(ToolCall {
                         id: tc.id.clone(),
@@ -95,46 +90,34 @@ impl AiClient {
             }
         }
 
-        let tool_calls = if tool_calls_vec.is_empty() {
-            None
-        } else {
-            Some(tool_calls_vec)
-        };
-
-        let content = content_parts.join("");
-        let has_tool_calls = tool_calls.is_some();
+        let tool_calls = (!tool_calls_vec.is_empty()).then_some(tool_calls_vec);
+        let content = (!content_parts.is_empty()).then(|| content_parts.join(""));
+        let finish_reason = Some(
+            if tool_calls.is_some() {
+                "tool_calls"
+            } else {
+                "stop"
+            }
+            .to_string(),
+        );
 
         Ok(ChatResponse {
-            content: if content.is_empty() {
-                None
-            } else {
-                Some(content)
-            },
+            content,
             tool_calls,
-            finish_reason: if has_tool_calls {
-                Some("tool_calls".to_string())
-            } else {
-                Some("stop".to_string())
-            },
+            finish_reason,
         })
     }
 }
 
 fn extract_text_content(msg: &Message) -> Option<String> {
     match msg {
-        Message::User { content } => content.iter().find_map(|c| {
-            if let UserContent::Text(t) = c {
-                Some(t.text.clone())
-            } else {
-                None
-            }
+        Message::User { content } => content.iter().find_map(|part| match part {
+            UserContent::Text(text) => Some(text.text.clone()),
+            _ => None,
         }),
-        Message::Assistant { content, .. } => content.iter().find_map(|c| {
-            if let AssistantContent::Text(t) = c {
-                Some(t.text.clone())
-            } else {
-                None
-            }
+        Message::Assistant { content, .. } => content.iter().find_map(|part| match part {
+            AssistantContent::Text(text) => Some(text.text.clone()),
+            _ => None,
         }),
     }
 }

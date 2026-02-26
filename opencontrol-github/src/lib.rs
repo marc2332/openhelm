@@ -11,11 +11,11 @@ fn repo_arg(args: &Value) -> Result<(String, String)> {
     let repo = args["repo"]
         .as_str()
         .context("Missing 'repo' argument (format: owner/repo)")?;
-    let parts: Vec<&str> = repo.split('/').collect();
-    if parts.len() != 2 {
-        bail!("'repo' must be in 'owner/repo' format, got: {}", repo);
-    }
-    Ok((parts[0].to_string(), parts[1].to_string()))
+    let (owner, name) = repo.split_once('/').context(format!(
+        "'repo' must be in 'owner/repo' format, got: {}",
+        repo
+    ))?;
+    Ok((owner.to_string(), name.to_string()))
 }
 
 struct GithubClient(Octocrab);
@@ -203,17 +203,15 @@ impl Tool for GithubGetIssueTool {
             issue["body"].as_str().unwrap_or("(no body)"),
         );
 
-        if let Some(comment_list) = comments.as_array() {
-            if !comment_list.is_empty() {
-                out.push_str(&format!("\n--- {} comment(s) ---\n", comment_list.len()));
-                for c in comment_list {
-                    out.push_str(&format!(
-                        "\n[{}] {}:\n{}\n",
-                        c["created_at"].as_str().unwrap_or("?"),
-                        c["user"]["login"].as_str().unwrap_or("?"),
-                        c["body"].as_str().unwrap_or("(empty)"),
-                    ));
-                }
+        if let Some(comment_list) = comments.as_array().filter(|list| !list.is_empty()) {
+            out.push_str(&format!("\n--- {} comment(s) ---\n", comment_list.len()));
+            for comment in comment_list {
+                out.push_str(&format!(
+                    "\n[{}] {}:\n{}\n",
+                    comment["created_at"].as_str().unwrap_or("?"),
+                    comment["user"]["login"].as_str().unwrap_or("?"),
+                    comment["body"].as_str().unwrap_or("(empty)"),
+                ));
             }
         }
 
@@ -349,17 +347,15 @@ impl Tool for GithubGetPrTool {
             pr["body"].as_str().unwrap_or("(no description)"),
         );
 
-        if let Some(comment_list) = comments.as_array() {
-            if !comment_list.is_empty() {
-                out.push_str(&format!("\n--- {} comment(s) ---\n", comment_list.len()));
-                for c in comment_list {
-                    out.push_str(&format!(
-                        "\n[{}] {}:\n{}\n",
-                        c["created_at"].as_str().unwrap_or("?"),
-                        c["user"]["login"].as_str().unwrap_or("?"),
-                        c["body"].as_str().unwrap_or("(empty)"),
-                    ));
-                }
+        if let Some(comment_list) = comments.as_array().filter(|list| !list.is_empty()) {
+            out.push_str(&format!("\n--- {} comment(s) ---\n", comment_list.len()));
+            for comment in comment_list {
+                out.push_str(&format!(
+                    "\n[{}] {}:\n{}\n",
+                    comment["created_at"].as_str().unwrap_or("?"),
+                    comment["user"]["login"].as_str().unwrap_or("?"),
+                    comment["body"].as_str().unwrap_or("(empty)"),
+                ));
             }
         }
 
@@ -406,11 +402,15 @@ impl Tool for GithubGetFileTool {
         let path = args["path"].as_str().context("Missing 'path' argument")?;
         let r#ref = args["ref"].as_str();
 
-        let api_path = if let Some(r) = r#ref {
-            format!("/repos/{}/{}/contents/{}?ref={}", owner, repo, path, r)
-        } else {
-            format!("/repos/{}/{}/contents/{}", owner, repo, path)
-        };
+        let api_path = r#ref.map_or_else(
+            || format!("/repos/{}/{}/contents/{}", owner, repo, path),
+            |git_ref| {
+                format!(
+                    "/repos/{}/{}/contents/{}?ref={}",
+                    owner, repo, path, git_ref
+                )
+            },
+        );
 
         let raw = self.0.get(&api_path).await?;
         let resp: ContentResponse =
@@ -425,7 +425,7 @@ impl Tool for GithubGetFileTool {
 
         if encoding == "base64" {
             use base64::Engine as _;
-            let cleaned: String = content.chars().filter(|c| *c != '\n').collect();
+            let cleaned = content.replace('\n', "");
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(&cleaned)
                 .context("Failed to decode base64 content")?;
@@ -453,8 +453,8 @@ impl Skill for GithubSkill {
 
     async fn build_tools(&self, config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>> {
         let token = config
-            .and_then(|v| v.get("token"))
-            .and_then(|v| v.as_str())
+            .and_then(|cfg| cfg.get("token"))
+            .and_then(|val| val.as_str())
             .context(
                 "GitHub skill requires a token. Add it to your profile:\n\
                  [profiles.<name>.skills.github]\n\

@@ -81,11 +81,11 @@ async fn command_handler(
     cmd: BotCommand,
     state: BotState,
 ) -> Result<(), teloxide::RequestError> {
-    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+    let user_id = msg.from.as_ref().map(|user| user.id.0 as i64).unwrap_or(0);
     let username = msg
         .from
         .as_ref()
-        .and_then(|u| u.username.clone())
+        .and_then(|user| user.username.clone())
         .unwrap_or_else(|| "unknown".to_string());
 
     match cmd {
@@ -105,7 +105,7 @@ async fn command_handler(
                     .read()
                     .await
                     .iter()
-                    .any(|p| p.telegram_id == user_id);
+                    .any(|pair| pair.telegram_id == user_id);
 
                 if !already_pending {
                     state.pending_pairs.write().await.push(PendingPair {
@@ -171,7 +171,7 @@ async fn command_handler(
                                     } else {
                                         paths
                                             .iter()
-                                            .map(|p| format!("    - {}", p))
+                                            .map(|path| format!("    - {}", path))
                                             .collect::<Vec<_>>()
                                             .join("\n")
                                     }
@@ -191,8 +191,8 @@ async fn command_handler(
 
                         bot.send_message(msg.chat.id, lines.join("\n")).await?;
                     }
-                    Err(e) => {
-                        bot.send_message(msg.chat.id, format!("Profile error: {}", e))
+                    Err(err) => {
+                        bot.send_message(msg.chat.id, format!("Profile error: {}", err))
                             .await?;
                     }
                 }
@@ -211,11 +211,11 @@ async fn message_handler(
     msg: Message,
     state: BotState,
 ) -> Result<(), teloxide::RequestError> {
-    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
-    let text = match msg.text() {
-        Some(t) => t.to_string(),
-        None => return Ok(()),
+    let user_id = msg.from.as_ref().map(|user| user.id.0 as i64).unwrap_or(0);
+    let Some(text) = msg.text() else {
+        return Ok(());
     };
+    let text = text.to_string();
 
     let (user, config_snapshot) = {
         let config = state.config.read().await;
@@ -223,16 +223,13 @@ async fn message_handler(
         (user, config.clone())
     };
 
-    let user = match user {
-        Some(u) => u,
-        None => {
-            bot.send_message(
-                msg.chat.id,
-                "You are not paired yet. Send /start to request access.",
-            )
-            .await?;
-            return Ok(());
-        }
+    let Some(user) = user else {
+        bot.send_message(
+            msg.chat.id,
+            "You are not paired yet. Send /start to request access.",
+        )
+        .await?;
+        return Ok(());
     };
 
     bot.send_chat_action(msg.chat.id, ChatAction::Typing)
@@ -248,9 +245,9 @@ async fn message_handler(
                 bot.send_message(msg.chat.id, chunk).await?;
             }
         }
-        Err(e) => {
-            error!(error = %e, user_id = user_id, "AI session error");
-            bot.send_message(msg.chat.id, format!("Error: {}", e))
+        Err(err) => {
+            error!(error = %err, user_id = user_id, "AI session error");
+            bot.send_message(msg.chat.id, format!("Error: {}", err))
                 .await?;
         }
     }
