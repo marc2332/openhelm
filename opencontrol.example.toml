@@ -33,5 +33,7 @@ mkdir = []
 [profiles.ricard.permissions.skills.github]
 token = "<GITHUB_TOKEN>"
 
+[profiles.ricard.permissions.skills.http] # keep it empty to enable http access (or remove it to disable http access)
+
 [audit]
 log_path = "/home/ricard/.local/share/opencontrol/audit.log"
