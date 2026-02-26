@@ -7,6 +7,7 @@ edition = "2024"
 opencontrol-sdk = { path = "../opencontrol-sdk" }
 
 anyhow = "1"
+async-trait = "0.1"
 reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1"
 toml = "0.8"

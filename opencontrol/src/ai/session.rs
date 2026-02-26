@@ -102,7 +102,7 @@ impl SessionManager {
         let model = config.effective_model(user);
         let system_prompt = config.effective_system_prompt(user);
 
-        let tools = ToolRegistry::for_profile(profile, &self.skills)?;
+        let tools = ToolRegistry::for_profile(profile, &self.skills).await?;
 
         let is_new = self.ensure_session(user, channel).await;
         if is_new {

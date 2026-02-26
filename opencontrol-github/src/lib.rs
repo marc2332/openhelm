@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use async_trait::async_trait;
 use octocrab::Octocrab;
 use serde_json::{Value, json};
 
@@ -36,6 +37,7 @@ impl GithubClient {
 
 struct GithubGetRepoTool(Arc<GithubClient>);
 
+#[async_trait]
 impl Tool for GithubGetRepoTool {
     fn name(&self) -> &'static str {
         "github_get_repo"
@@ -55,37 +57,33 @@ impl Tool for GithubGetRepoTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let (owner, repo) = repo_arg(args)?;
-            let data = self.0.get(&format!("/repos/{}/{}", owner, repo)).await?;
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let (owner, repo) = repo_arg(args)?;
+        let data = self.0.get(&format!("/repos/{}/{}", owner, repo)).await?;
 
-            let output = format!(
-                "Repo:          {}\nDescription:   {}\nVisibility:    {}\nDefault branch:{}\nStars:         {}\nForks:         {}\nOpen issues:   {}\nLicense:       {}\nURL:           {}",
-                data["full_name"].as_str().unwrap_or("-"),
-                data["description"].as_str().unwrap_or("(none)"),
-                data["visibility"].as_str().unwrap_or("-"),
-                data["default_branch"].as_str().unwrap_or("-"),
-                data["stargazers_count"].as_u64().unwrap_or(0),
-                data["forks_count"].as_u64().unwrap_or(0),
-                data["open_issues_count"].as_u64().unwrap_or(0),
-                data["license"]["name"].as_str().unwrap_or("(none)"),
-                data["html_url"].as_str().unwrap_or("-"),
-            );
+        let output = format!(
+            "Repo:          {}\nDescription:   {}\nVisibility:    {}\nDefault branch:{}\nStars:         {}\nForks:         {}\nOpen issues:   {}\nLicense:       {}\nURL:           {}",
+            data["full_name"].as_str().unwrap_or("-"),
+            data["description"].as_str().unwrap_or("(none)"),
+            data["visibility"].as_str().unwrap_or("-"),
+            data["default_branch"].as_str().unwrap_or("-"),
+            data["stargazers_count"].as_u64().unwrap_or(0),
+            data["forks_count"].as_u64().unwrap_or(0),
+            data["open_issues_count"].as_u64().unwrap_or(0),
+            data["license"]["name"].as_str().unwrap_or("(none)"),
+            data["html_url"].as_str().unwrap_or("-"),
+        );
 
-            Ok(ToolOutput {
-                success: true,
-                output,
-            })
+        Ok(ToolOutput {
+            success: true,
+            output,
         })
     }
 }
 
 struct GithubListIssuesTool(Arc<GithubClient>);
 
+#[async_trait]
 impl Tool for GithubListIssuesTool {
     fn name(&self) -> &'static str {
         "github_list_issues"
@@ -107,59 +105,55 @@ impl Tool for GithubListIssuesTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let (owner, repo) = repo_arg(args)?;
-            let state = args["state"].as_str().unwrap_or("open");
-            let limit = args["limit"].as_u64().unwrap_or(20).min(100);
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let (owner, repo) = repo_arg(args)?;
+        let state = args["state"].as_str().unwrap_or("open");
+        let limit = args["limit"].as_u64().unwrap_or(20).min(100);
 
-            let data = self
-                .0
-                .get(&format!(
-                    "/repos/{}/{}/issues?state={}&per_page={}&pulls=false",
-                    owner, repo, state, limit
-                ))
-                .await?;
+        let data = self
+            .0
+            .get(&format!(
+                "/repos/{}/{}/issues?state={}&per_page={}&pulls=false",
+                owner, repo, state, limit
+            ))
+            .await?;
 
-            let issues = data.as_array().context("Expected array of issues")?;
-            let issues: Vec<_> = issues
-                .iter()
-                .filter(|i| i["pull_request"].is_null())
-                .collect();
+        let issues = data.as_array().context("Expected array of issues")?;
+        let issues: Vec<_> = issues
+            .iter()
+            .filter(|i| i["pull_request"].is_null())
+            .collect();
 
-            if issues.is_empty() {
-                return Ok(ToolOutput {
-                    success: true,
-                    output: "No issues found.".to_string(),
-                });
-            }
-
-            let lines: Vec<String> = issues
-                .iter()
-                .map(|i| {
-                    format!(
-                        "#{} [{}] {} ({})",
-                        i["number"].as_u64().unwrap_or(0),
-                        i["state"].as_str().unwrap_or("open"),
-                        i["title"].as_str().unwrap_or("(no title)"),
-                        i["user"]["login"].as_str().unwrap_or("?"),
-                    )
-                })
-                .collect();
-
-            Ok(ToolOutput {
+        if issues.is_empty() {
+            return Ok(ToolOutput {
                 success: true,
-                output: lines.join("\n"),
+                output: "No issues found.".to_string(),
+            });
+        }
+
+        let lines: Vec<String> = issues
+            .iter()
+            .map(|i| {
+                format!(
+                    "#{} [{}] {} ({})",
+                    i["number"].as_u64().unwrap_or(0),
+                    i["state"].as_str().unwrap_or("open"),
+                    i["title"].as_str().unwrap_or("(no title)"),
+                    i["user"]["login"].as_str().unwrap_or("?"),
+                )
             })
+            .collect();
+
+        Ok(ToolOutput {
+            success: true,
+            output: lines.join("\n"),
         })
     }
 }
 
 struct GithubGetIssueTool(Arc<GithubClient>);
 
+#[async_trait]
 impl Tool for GithubGetIssueTool {
     fn name(&self) -> &'static str {
         "github_get_issue"
@@ -180,63 +174,59 @@ impl Tool for GithubGetIssueTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let (owner, repo) = repo_arg(args)?;
-            let number = args["number"]
-                .as_u64()
-                .context("Missing 'number' argument")?;
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let (owner, repo) = repo_arg(args)?;
+        let number = args["number"]
+            .as_u64()
+            .context("Missing 'number' argument")?;
 
-            let issue = self
-                .0
-                .get(&format!("/repos/{}/{}/issues/{}", owner, repo, number))
-                .await?;
-            let comments = self
-                .0
-                .get(&format!(
-                    "/repos/{}/{}/issues/{}/comments",
-                    owner, repo, number
-                ))
-                .await?;
+        let issue = self
+            .0
+            .get(&format!("/repos/{}/{}/issues/{}", owner, repo, number))
+            .await?;
+        let comments = self
+            .0
+            .get(&format!(
+                "/repos/{}/{}/issues/{}/comments",
+                owner, repo, number
+            ))
+            .await?;
 
-            let mut out = format!(
-                "#{} [{}] {}\nAuthor: {}\nCreated: {}\nURL: {}\n\n{}\n",
-                issue["number"].as_u64().unwrap_or(0),
-                issue["state"].as_str().unwrap_or("open"),
-                issue["title"].as_str().unwrap_or("(no title)"),
-                issue["user"]["login"].as_str().unwrap_or("?"),
-                issue["created_at"].as_str().unwrap_or("?"),
-                issue["html_url"].as_str().unwrap_or("?"),
-                issue["body"].as_str().unwrap_or("(no body)"),
-            );
+        let mut out = format!(
+            "#{} [{}] {}\nAuthor: {}\nCreated: {}\nURL: {}\n\n{}\n",
+            issue["number"].as_u64().unwrap_or(0),
+            issue["state"].as_str().unwrap_or("open"),
+            issue["title"].as_str().unwrap_or("(no title)"),
+            issue["user"]["login"].as_str().unwrap_or("?"),
+            issue["created_at"].as_str().unwrap_or("?"),
+            issue["html_url"].as_str().unwrap_or("?"),
+            issue["body"].as_str().unwrap_or("(no body)"),
+        );
 
-            if let Some(comment_list) = comments.as_array() {
-                if !comment_list.is_empty() {
-                    out.push_str(&format!("\n--- {} comment(s) ---\n", comment_list.len()));
-                    for c in comment_list {
-                        out.push_str(&format!(
-                            "\n[{}] {}:\n{}\n",
-                            c["created_at"].as_str().unwrap_or("?"),
-                            c["user"]["login"].as_str().unwrap_or("?"),
-                            c["body"].as_str().unwrap_or("(empty)"),
-                        ));
-                    }
+        if let Some(comment_list) = comments.as_array() {
+            if !comment_list.is_empty() {
+                out.push_str(&format!("\n--- {} comment(s) ---\n", comment_list.len()));
+                for c in comment_list {
+                    out.push_str(&format!(
+                        "\n[{}] {}:\n{}\n",
+                        c["created_at"].as_str().unwrap_or("?"),
+                        c["user"]["login"].as_str().unwrap_or("?"),
+                        c["body"].as_str().unwrap_or("(empty)"),
+                    ));
                 }
             }
+        }
 
-            Ok(ToolOutput {
-                success: true,
-                output: out,
-            })
+        Ok(ToolOutput {
+            success: true,
+            output: out,
         })
     }
 }
 
 struct GithubListPrsTool(Arc<GithubClient>);
 
+#[async_trait]
 impl Tool for GithubListPrsTool {
     fn name(&self) -> &'static str {
         "github_list_prs"
@@ -258,57 +248,53 @@ impl Tool for GithubListPrsTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let (owner, repo) = repo_arg(args)?;
-            let state = args["state"].as_str().unwrap_or("open");
-            let limit = args["limit"].as_u64().unwrap_or(20).min(100);
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let (owner, repo) = repo_arg(args)?;
+        let state = args["state"].as_str().unwrap_or("open");
+        let limit = args["limit"].as_u64().unwrap_or(20).min(100);
 
-            let data = self
-                .0
-                .get(&format!(
-                    "/repos/{}/{}/pulls?state={}&per_page={}",
-                    owner, repo, state, limit
-                ))
-                .await?;
+        let data = self
+            .0
+            .get(&format!(
+                "/repos/{}/{}/pulls?state={}&per_page={}",
+                owner, repo, state, limit
+            ))
+            .await?;
 
-            let prs = data.as_array().context("Expected array of PRs")?;
+        let prs = data.as_array().context("Expected array of PRs")?;
 
-            if prs.is_empty() {
-                return Ok(ToolOutput {
-                    success: true,
-                    output: "No pull requests found.".to_string(),
-                });
-            }
-
-            let lines: Vec<String> = prs
-                .iter()
-                .map(|pr| {
-                    format!(
-                        "#{} [{}] {} ({} → {}) by {}",
-                        pr["number"].as_u64().unwrap_or(0),
-                        pr["state"].as_str().unwrap_or("open"),
-                        pr["title"].as_str().unwrap_or("(no title)"),
-                        pr["head"]["ref"].as_str().unwrap_or("?"),
-                        pr["base"]["ref"].as_str().unwrap_or("?"),
-                        pr["user"]["login"].as_str().unwrap_or("?"),
-                    )
-                })
-                .collect();
-
-            Ok(ToolOutput {
+        if prs.is_empty() {
+            return Ok(ToolOutput {
                 success: true,
-                output: lines.join("\n"),
+                output: "No pull requests found.".to_string(),
+            });
+        }
+
+        let lines: Vec<String> = prs
+            .iter()
+            .map(|pr| {
+                format!(
+                    "#{} [{}] {} ({} → {}) by {}",
+                    pr["number"].as_u64().unwrap_or(0),
+                    pr["state"].as_str().unwrap_or("open"),
+                    pr["title"].as_str().unwrap_or("(no title)"),
+                    pr["head"]["ref"].as_str().unwrap_or("?"),
+                    pr["base"]["ref"].as_str().unwrap_or("?"),
+                    pr["user"]["login"].as_str().unwrap_or("?"),
+                )
             })
+            .collect();
+
+        Ok(ToolOutput {
+            success: true,
+            output: lines.join("\n"),
         })
     }
 }
 
 struct GithubGetPrTool(Arc<GithubClient>);
 
+#[async_trait]
 impl Tool for GithubGetPrTool {
     fn name(&self) -> &'static str {
         "github_get_pr"
@@ -329,62 +315,57 @@ impl Tool for GithubGetPrTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let (owner, repo) = repo_arg(args)?;
-            let number = args["number"]
-                .as_u64()
-                .context("Missing 'number' argument")?;
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let (owner, repo) = repo_arg(args)?;
+        let number = args["number"]
+            .as_u64()
+            .context("Missing 'number' argument")?;
 
-            let pr = self
-                .0
-                .get(&format!("/repos/{}/{}/pulls/{}", owner, repo, number))
-                .await?;
-            let comments = self
-                .0
-                .get(&format!(
-                    "/repos/{}/{}/issues/{}/comments",
-                    owner, repo, number
-                ))
-                .await?;
+        let pr = self
+            .0
+            .get(&format!("/repos/{}/{}/pulls/{}", owner, repo, number))
+            .await?;
+        let comments = self
+            .0
+            .get(&format!(
+                "/repos/{}/{}/issues/{}/comments",
+                owner, repo, number
+            ))
+            .await?;
 
-            let mut out = format!(
-                "#{} [{}] {}\nAuthor:  {}\nBranch:  {} → {}\nCreated: {}\nURL:     {}\nChanges: +{} -{} in {} file(s)\n\n{}\n",
-                pr["number"].as_u64().unwrap_or(0),
-                pr["state"].as_str().unwrap_or("open"),
-                pr["title"].as_str().unwrap_or("(no title)"),
-                pr["user"]["login"].as_str().unwrap_or("?"),
-                pr["head"]["ref"].as_str().unwrap_or("?"),
-                pr["base"]["ref"].as_str().unwrap_or("?"),
-                pr["created_at"].as_str().unwrap_or("?"),
-                pr["html_url"].as_str().unwrap_or("?"),
-                pr["additions"].as_u64().unwrap_or(0),
-                pr["deletions"].as_u64().unwrap_or(0),
-                pr["changed_files"].as_u64().unwrap_or(0),
-                pr["body"].as_str().unwrap_or("(no description)"),
-            );
+        let mut out = format!(
+            "#{} [{}] {}\nAuthor:  {}\nBranch:  {} → {}\nCreated: {}\nURL:     {}\nChanges: +{} -{} in {} file(s)\n\n{}\n",
+            pr["number"].as_u64().unwrap_or(0),
+            pr["state"].as_str().unwrap_or("open"),
+            pr["title"].as_str().unwrap_or("(no title)"),
+            pr["user"]["login"].as_str().unwrap_or("?"),
+            pr["head"]["ref"].as_str().unwrap_or("?"),
+            pr["base"]["ref"].as_str().unwrap_or("?"),
+            pr["created_at"].as_str().unwrap_or("?"),
+            pr["html_url"].as_str().unwrap_or("?"),
+            pr["additions"].as_u64().unwrap_or(0),
+            pr["deletions"].as_u64().unwrap_or(0),
+            pr["changed_files"].as_u64().unwrap_or(0),
+            pr["body"].as_str().unwrap_or("(no description)"),
+        );
 
-            if let Some(comment_list) = comments.as_array() {
-                if !comment_list.is_empty() {
-                    out.push_str(&format!("\n--- {} comment(s) ---\n", comment_list.len()));
-                    for c in comment_list {
-                        out.push_str(&format!(
-                            "\n[{}] {}:\n{}\n",
-                            c["created_at"].as_str().unwrap_or("?"),
-                            c["user"]["login"].as_str().unwrap_or("?"),
-                            c["body"].as_str().unwrap_or("(empty)"),
-                        ));
-                    }
+        if let Some(comment_list) = comments.as_array() {
+            if !comment_list.is_empty() {
+                out.push_str(&format!("\n--- {} comment(s) ---\n", comment_list.len()));
+                for c in comment_list {
+                    out.push_str(&format!(
+                        "\n[{}] {}:\n{}\n",
+                        c["created_at"].as_str().unwrap_or("?"),
+                        c["user"]["login"].as_str().unwrap_or("?"),
+                        c["body"].as_str().unwrap_or("(empty)"),
+                    ));
                 }
             }
+        }
 
-            Ok(ToolOutput {
-                success: true,
-                output: out,
-            })
+        Ok(ToolOutput {
+            success: true,
+            output: out,
         })
     }
 }
@@ -398,6 +379,7 @@ struct ContentResponse {
 
 struct GithubGetFileTool(Arc<GithubClient>);
 
+#[async_trait]
 impl Tool for GithubGetFileTool {
     fn name(&self) -> &'static str {
         "github_get_file"
@@ -419,61 +401,57 @@ impl Tool for GithubGetFileTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let (owner, repo) = repo_arg(args)?;
-            let path = args["path"].as_str().context("Missing 'path' argument")?;
-            let r#ref = args["ref"].as_str();
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let (owner, repo) = repo_arg(args)?;
+        let path = args["path"].as_str().context("Missing 'path' argument")?;
+        let r#ref = args["ref"].as_str();
 
-            let api_path = if let Some(r) = r#ref {
-                format!("/repos/{}/{}/contents/{}?ref={}", owner, repo, path, r)
-            } else {
-                format!("/repos/{}/{}/contents/{}", owner, repo, path)
-            };
+        let api_path = if let Some(r) = r#ref {
+            format!("/repos/{}/{}/contents/{}?ref={}", owner, repo, path, r)
+        } else {
+            format!("/repos/{}/{}/contents/{}", owner, repo, path)
+        };
 
-            let raw = self.0.get(&api_path).await?;
-            let resp: ContentResponse =
-                serde_json::from_value(raw).context("Failed to parse contents response")?;
+        let raw = self.0.get(&api_path).await?;
+        let resp: ContentResponse =
+            serde_json::from_value(raw).context("Failed to parse contents response")?;
 
-            if let Some(msg) = resp.message {
-                bail!("GitHub API error: {}", msg);
-            }
+        if let Some(msg) = resp.message {
+            bail!("GitHub API error: {}", msg);
+        }
 
-            let content = resp.content.context("No content in response")?;
-            let encoding = resp.encoding.as_deref().unwrap_or("none");
+        let content = resp.content.context("No content in response")?;
+        let encoding = resp.encoding.as_deref().unwrap_or("none");
 
-            if encoding == "base64" {
-                use base64::Engine as _;
-                let cleaned: String = content.chars().filter(|c| *c != '\n').collect();
-                let decoded = base64::engine::general_purpose::STANDARD
-                    .decode(&cleaned)
-                    .context("Failed to decode base64 content")?;
-                let text = String::from_utf8(decoded).context("File content is not valid UTF-8")?;
-                Ok(ToolOutput {
-                    success: true,
-                    output: text,
-                })
-            } else {
-                Ok(ToolOutput {
-                    success: true,
-                    output: content,
-                })
-            }
-        })
+        if encoding == "base64" {
+            use base64::Engine as _;
+            let cleaned: String = content.chars().filter(|c| *c != '\n').collect();
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(&cleaned)
+                .context("Failed to decode base64 content")?;
+            let text = String::from_utf8(decoded).context("File content is not valid UTF-8")?;
+            Ok(ToolOutput {
+                success: true,
+                output: text,
+            })
+        } else {
+            Ok(ToolOutput {
+                success: true,
+                output: content,
+            })
+        }
     }
 }
 
 pub struct GithubSkill;
 
+#[async_trait]
 impl Skill for GithubSkill {
     fn name(&self) -> &'static str {
         "github"
     }
 
-    fn build_tools(&self, config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>> {
+    async fn build_tools(&self, config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>> {
         let token = config
             .and_then(|v| v.get("token"))
             .and_then(|v| v.as_str())

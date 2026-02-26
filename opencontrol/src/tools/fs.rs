@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use tokio::fs;
@@ -69,6 +70,7 @@ fn check_allowed(path: &PathBuf, allowed: &[String], operation: &str) -> Result<
 
 pub struct FsReadTool;
 
+#[async_trait]
 impl Tool for FsReadTool {
     fn name(&self) -> &'static str {
         "fs_read"
@@ -91,30 +93,25 @@ impl Tool for FsReadTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-        context: &'a ToolContext,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let path_str = args["path"].as_str().context("Missing 'path' argument")?;
-            let path = resolve_path(path_str)?;
-            check_allowed(&path, &context.fs.read, "read")?;
+    async fn execute(&self, args: &Value, context: &ToolContext) -> Result<ToolOutput> {
+        let path_str = args["path"].as_str().context("Missing 'path' argument")?;
+        let path = resolve_path(path_str)?;
+        check_allowed(&path, &context.fs.read, "read")?;
 
-            let contents = fs::read_to_string(&path)
-                .await
-                .with_context(|| format!("Failed to read file: {}", path.display()))?;
+        let contents = fs::read_to_string(&path)
+            .await
+            .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-            Ok(ToolOutput {
-                success: true,
-                output: contents,
-            })
+        Ok(ToolOutput {
+            success: true,
+            output: contents,
         })
     }
 }
 
 pub struct FsWriteTool;
 
+#[async_trait]
 impl Tool for FsWriteTool {
     fn name(&self) -> &'static str {
         "fs_write"
@@ -141,39 +138,34 @@ impl Tool for FsWriteTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-        context: &'a ToolContext,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let path_str = args["path"].as_str().context("Missing 'path' argument")?;
-            let content = args["content"]
-                .as_str()
-                .context("Missing 'content' argument")?;
-            let path = resolve_path(path_str)?;
-            check_allowed(&path, &context.fs.write, "write")?;
+    async fn execute(&self, args: &Value, context: &ToolContext) -> Result<ToolOutput> {
+        let path_str = args["path"].as_str().context("Missing 'path' argument")?;
+        let content = args["content"]
+            .as_str()
+            .context("Missing 'content' argument")?;
+        let path = resolve_path(path_str)?;
+        check_allowed(&path, &context.fs.write, "write")?;
 
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).await.with_context(|| {
-                    format!("Failed to create parent directory: {}", parent.display())
-                })?;
-            }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await.with_context(|| {
+                format!("Failed to create parent directory: {}", parent.display())
+            })?;
+        }
 
-            fs::write(&path, content)
-                .await
-                .with_context(|| format!("Failed to write file: {}", path.display()))?;
+        fs::write(&path, content)
+            .await
+            .with_context(|| format!("Failed to write file: {}", path.display()))?;
 
-            Ok(ToolOutput {
-                success: true,
-                output: format!("Written {} bytes to {}", content.len(), path.display()),
-            })
+        Ok(ToolOutput {
+            success: true,
+            output: format!("Written {} bytes to {}", content.len(), path.display()),
         })
     }
 }
 
 pub struct FsListTool;
 
+#[async_trait]
 impl Tool for FsListTool {
     fn name(&self) -> &'static str {
         "fs_list"
@@ -196,48 +188,43 @@ impl Tool for FsListTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-        context: &'a ToolContext,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let path_str = args["path"].as_str().context("Missing 'path' argument")?;
-            let path = resolve_path(path_str)?;
-            check_allowed(&path, &context.fs.read_dir, "read_dir")?;
+    async fn execute(&self, args: &Value, context: &ToolContext) -> Result<ToolOutput> {
+        let path_str = args["path"].as_str().context("Missing 'path' argument")?;
+        let path = resolve_path(path_str)?;
+        check_allowed(&path, &context.fs.read_dir, "read_dir")?;
 
-            let mut entries = fs::read_dir(&path)
-                .await
-                .with_context(|| format!("Failed to list directory: {}", path.display()))?;
+        let mut entries = fs::read_dir(&path)
+            .await
+            .with_context(|| format!("Failed to list directory: {}", path.display()))?;
 
-            let mut lines: Vec<String> = vec![];
-            while let Some(entry) = entries.next_entry().await? {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let meta = entry.metadata().await?;
-                let kind = if meta.is_dir() { "dir" } else { "file" };
-                let size = if meta.is_file() {
-                    format!(" ({} bytes)", meta.len())
-                } else {
-                    String::new()
-                };
-                lines.push(format!("[{}] {}{}", kind, name, size));
-            }
+        let mut lines: Vec<String> = vec![];
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let meta = entry.metadata().await?;
+            let kind = if meta.is_dir() { "dir" } else { "file" };
+            let size = if meta.is_file() {
+                format!(" ({} bytes)", meta.len())
+            } else {
+                String::new()
+            };
+            lines.push(format!("[{}] {}{}", kind, name, size));
+        }
 
-            lines.sort();
-            Ok(ToolOutput {
-                success: true,
-                output: if lines.is_empty() {
-                    "(empty directory)".to_string()
-                } else {
-                    lines.join("\n")
-                },
-            })
+        lines.sort();
+        Ok(ToolOutput {
+            success: true,
+            output: if lines.is_empty() {
+                "(empty directory)".to_string()
+            } else {
+                lines.join("\n")
+            },
         })
     }
 }
 
 pub struct FsMkdirTool;
 
+#[async_trait]
 impl Tool for FsMkdirTool {
     fn name(&self) -> &'static str {
         "fs_mkdir"
@@ -260,24 +247,18 @@ impl Tool for FsMkdirTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-        context: &'a ToolContext,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let path_str = args["path"].as_str().context("Missing 'path' argument")?;
-            let path = resolve_path(path_str)?;
-            check_allowed(&path, &context.fs.mkdir, "mkdir")?;
+    async fn execute(&self, args: &Value, context: &ToolContext) -> Result<ToolOutput> {
+        let path_str = args["path"].as_str().context("Missing 'path' argument")?;
+        let path = resolve_path(path_str)?;
+        check_allowed(&path, &context.fs.mkdir, "mkdir")?;
 
-            fs::create_dir_all(&path)
-                .await
-                .with_context(|| format!("Failed to create directory: {}", path.display()))?;
+        fs::create_dir_all(&path)
+            .await
+            .with_context(|| format!("Failed to create directory: {}", path.display()))?;
 
-            Ok(ToolOutput {
-                success: true,
-                output: format!("Created directory {}", path.display()),
-            })
+        Ok(ToolOutput {
+            success: true,
+            output: format!("Created directory {}", path.display()),
         })
     }
 }

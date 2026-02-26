@@ -1,6 +1,7 @@
 pub mod fs;
 
 use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -13,14 +14,11 @@ pub struct ToolOutput {
     pub output: String,
 }
 
+#[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     fn definition(&self) -> ToolDefinition;
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-        context: &'a ToolContext,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>>;
+    async fn execute(&self, args: &Value, context: &ToolContext) -> Result<ToolOutput>;
 }
 
 pub struct ToolContext {
@@ -37,6 +35,7 @@ impl ToolContext {
 
 struct SdkToolAdapter(Box<dyn opencontrol_sdk::Tool>);
 
+#[async_trait]
 impl Tool for SdkToolAdapter {
     fn name(&self) -> &'static str {
         self.0.name()
@@ -46,17 +45,11 @@ impl Tool for SdkToolAdapter {
         self.0.definition()
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-        _context: &'a ToolContext,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let result = self.0.execute(args).await?;
-            Ok(ToolOutput {
-                success: result.success,
-                output: result.output,
-            })
+    async fn execute(&self, args: &Value, _context: &ToolContext) -> Result<ToolOutput> {
+        let result = self.0.execute(args).await?;
+        Ok(ToolOutput {
+            success: result.success,
+            output: result.output,
         })
     }
 }
@@ -81,7 +74,7 @@ impl SkillRegistry {
         }
     }
 
-    pub fn build_tools_for(
+    pub async fn build_tools_for(
         &self,
         profile: &Profile,
     ) -> Result<(Vec<Box<dyn Tool>>, HashMap<String, &'static str>)> {
@@ -90,7 +83,7 @@ impl SkillRegistry {
 
         for skill in &self.skills {
             if let Some(skill_config) = profile.permissions.skills.get(skill.name()) {
-                let built = skill.build_tools(Some(skill_config))?;
+                let built = skill.build_tools(Some(skill_config)).await?;
                 for t in built {
                     name_map.insert(t.name().to_string(), skill.name());
                     tools.push(Box::new(SdkToolAdapter(t)));
@@ -115,8 +108,8 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
-    pub fn for_profile(profile: &Profile, skills: &SkillRegistry) -> Result<Self> {
-        let (skill_tools, skill_tool_map) = skills.build_tools_for(profile)?;
+    pub async fn for_profile(profile: &Profile, skills: &SkillRegistry) -> Result<Self> {
+        let (skill_tools, skill_tool_map) = skills.build_tools_for(profile).await?;
         Ok(Self {
             fs_tools: vec![
                 Box::new(fs::FsReadTool),

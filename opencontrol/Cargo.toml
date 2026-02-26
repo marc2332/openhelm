@@ -44,6 +44,7 @@ thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Async utilities
+async-trait = "0.1"
 futures = "0.3"
 tokio-stream = "0.1"
 

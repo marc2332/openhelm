@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{Value, json};
 
@@ -86,6 +87,7 @@ fn format_head_response(
 
 struct HttpGetTool(Arc<HttpClient>);
 
+#[async_trait]
 impl Tool for HttpGetTool {
     fn name(&self) -> &'static str {
         "http_get"
@@ -110,31 +112,27 @@ impl Tool for HttpGetTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let url = url_arg(args)?;
-            let builder = apply_headers(self.0.client.get(url), args);
-            let response = builder.send().await.context("HTTP GET request failed")?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response
-                .text()
-                .await
-                .context("Failed to read response body")?;
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let url = url_arg(args)?;
+        let builder = apply_headers(self.0.client.get(url), args);
+        let response = builder.send().await.context("HTTP GET request failed")?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
 
-            Ok(ToolOutput {
-                success: status.is_success(),
-                output: format_response(status, &headers, &body, self.0.max_body_bytes),
-            })
+        Ok(ToolOutput {
+            success: status.is_success(),
+            output: format_response(status, &headers, &body, self.0.max_body_bytes),
         })
     }
 }
 
 struct HttpPostTool(Arc<HttpClient>);
 
+#[async_trait]
 impl Tool for HttpPostTool {
     fn name(&self) -> &'static str {
         "http_post"
@@ -163,34 +161,30 @@ impl Tool for HttpPostTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let url = url_arg(args)?;
-            let mut builder = apply_headers(self.0.client.post(url), args);
-            if let Some(body) = args.get("body") {
-                builder = builder.json(body);
-            }
-            let response = builder.send().await.context("HTTP POST request failed")?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response
-                .text()
-                .await
-                .context("Failed to read response body")?;
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let url = url_arg(args)?;
+        let mut builder = apply_headers(self.0.client.post(url), args);
+        if let Some(body) = args.get("body") {
+            builder = builder.json(body);
+        }
+        let response = builder.send().await.context("HTTP POST request failed")?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
 
-            Ok(ToolOutput {
-                success: status.is_success(),
-                output: format_response(status, &headers, &body, self.0.max_body_bytes),
-            })
+        Ok(ToolOutput {
+            success: status.is_success(),
+            output: format_response(status, &headers, &body, self.0.max_body_bytes),
         })
     }
 }
 
 struct HttpPutTool(Arc<HttpClient>);
 
+#[async_trait]
 impl Tool for HttpPutTool {
     fn name(&self) -> &'static str {
         "http_put"
@@ -219,34 +213,30 @@ impl Tool for HttpPutTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let url = url_arg(args)?;
-            let mut builder = apply_headers(self.0.client.put(url), args);
-            if let Some(body) = args.get("body") {
-                builder = builder.json(body);
-            }
-            let response = builder.send().await.context("HTTP PUT request failed")?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response
-                .text()
-                .await
-                .context("Failed to read response body")?;
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let url = url_arg(args)?;
+        let mut builder = apply_headers(self.0.client.put(url), args);
+        if let Some(body) = args.get("body") {
+            builder = builder.json(body);
+        }
+        let response = builder.send().await.context("HTTP PUT request failed")?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
 
-            Ok(ToolOutput {
-                success: status.is_success(),
-                output: format_response(status, &headers, &body, self.0.max_body_bytes),
-            })
+        Ok(ToolOutput {
+            success: status.is_success(),
+            output: format_response(status, &headers, &body, self.0.max_body_bytes),
         })
     }
 }
 
 struct HttpPatchTool(Arc<HttpClient>);
 
+#[async_trait]
 impl Tool for HttpPatchTool {
     fn name(&self) -> &'static str {
         "http_patch"
@@ -275,34 +265,30 @@ impl Tool for HttpPatchTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let url = url_arg(args)?;
-            let mut builder = apply_headers(self.0.client.patch(url), args);
-            if let Some(body) = args.get("body") {
-                builder = builder.json(body);
-            }
-            let response = builder.send().await.context("HTTP PATCH request failed")?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response
-                .text()
-                .await
-                .context("Failed to read response body")?;
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let url = url_arg(args)?;
+        let mut builder = apply_headers(self.0.client.patch(url), args);
+        if let Some(body) = args.get("body") {
+            builder = builder.json(body);
+        }
+        let response = builder.send().await.context("HTTP PATCH request failed")?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
 
-            Ok(ToolOutput {
-                success: status.is_success(),
-                output: format_response(status, &headers, &body, self.0.max_body_bytes),
-            })
+        Ok(ToolOutput {
+            success: status.is_success(),
+            output: format_response(status, &headers, &body, self.0.max_body_bytes),
         })
     }
 }
 
 struct HttpDeleteTool(Arc<HttpClient>);
 
+#[async_trait]
 impl Tool for HttpDeleteTool {
     fn name(&self) -> &'static str {
         "http_delete"
@@ -327,31 +313,27 @@ impl Tool for HttpDeleteTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let url = url_arg(args)?;
-            let builder = apply_headers(self.0.client.delete(url), args);
-            let response = builder.send().await.context("HTTP DELETE request failed")?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response
-                .text()
-                .await
-                .context("Failed to read response body")?;
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let url = url_arg(args)?;
+        let builder = apply_headers(self.0.client.delete(url), args);
+        let response = builder.send().await.context("HTTP DELETE request failed")?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
 
-            Ok(ToolOutput {
-                success: status.is_success(),
-                output: format_response(status, &headers, &body, self.0.max_body_bytes),
-            })
+        Ok(ToolOutput {
+            success: status.is_success(),
+            output: format_response(status, &headers, &body, self.0.max_body_bytes),
         })
     }
 }
 
 struct HttpHeadTool(Arc<HttpClient>);
 
+#[async_trait]
 impl Tool for HttpHeadTool {
     fn name(&self) -> &'static str {
         "http_head"
@@ -376,21 +358,16 @@ impl Tool for HttpHeadTool {
         )
     }
 
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        Box::pin(async move {
-            let url = url_arg(args)?;
-            let builder = apply_headers(self.0.client.head(url), args);
-            let response = builder.send().await.context("HTTP HEAD request failed")?;
-            let status = response.status();
-            let headers = response.headers().clone();
+    async fn execute(&self, args: &Value) -> Result<ToolOutput> {
+        let url = url_arg(args)?;
+        let builder = apply_headers(self.0.client.head(url), args);
+        let response = builder.send().await.context("HTTP HEAD request failed")?;
+        let status = response.status();
+        let headers = response.headers().clone();
 
-            Ok(ToolOutput {
-                success: status.is_success(),
-                output: format_head_response(status, &headers),
-            })
+        Ok(ToolOutput {
+            success: status.is_success(),
+            output: format_head_response(status, &headers),
         })
     }
 }
@@ -399,12 +376,13 @@ impl Tool for HttpHeadTool {
 
 pub struct HttpSkill;
 
+#[async_trait]
 impl Skill for HttpSkill {
     fn name(&self) -> &'static str {
         "http"
     }
 
-    fn build_tools(&self, config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>> {
+    async fn build_tools(&self, config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>> {
         let max_body_bytes = config
             .and_then(|v| v.get("max_body_bytes"))
             .and_then(|v| v.as_integer())

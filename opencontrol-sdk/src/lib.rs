@@ -1,7 +1,6 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::Value;
-use std::future::Future;
-use std::pin::Pin;
 
 pub use anyhow;
 pub use serde_json;
@@ -53,18 +52,17 @@ impl ToolDefinition {
 /// A tool that can be invoked by the AI.
 /// Skill tools bake all required config in at construction time (via
 /// [`Skill::build_tools`]) so they need no runtime context.
+#[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     fn definition(&self) -> ToolDefinition;
-    fn execute<'a>(
-        &'a self,
-        args: &'a Value,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>>;
+    async fn execute(&self, args: &Value) -> Result<ToolOutput>;
 }
 
 // ─── Skill trait ──────────────────────────────────────────────────────────────
 
 /// A skill bundles a set of related tools and knows how to configure them.
+#[async_trait]
 pub trait Skill: Send + Sync {
     /// Unique lowercase identifier, e.g. `"github"`.
     fn name(&self) -> &'static str;
@@ -72,5 +70,5 @@ pub trait Skill: Send + Sync {
     /// Build pre-configured tool instances from the raw per-profile config
     /// table (`[profiles.<name>.skills.<skill>]`), or `None` if the table is
     /// absent.  Returns an error if required config (e.g. a token) is missing.
-    fn build_tools(&self, config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>>;
+    async fn build_tools(&self, config: Option<&toml::Value>) -> Result<Vec<Box<dyn Tool>>>;
 }
