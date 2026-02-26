@@ -7,8 +7,6 @@ use tokio::{
 
 use crate::config::FsPermissions;
 
-// ─── Request / Response types ─────────────────────────────────────────────────
-
 /// Commands sent from CLI -> daemon.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -108,8 +106,6 @@ pub struct ProfileInfo {
     pub fs_enabled: bool,
     pub fs: Option<FsPermissions>,
 }
-
-// ─── Wire protocol ────────────────────────────────────────────────────────────
 
 pub async fn send_request(stream: &mut UnixStream, req: &IpcRequest) -> Result<()> {
     let mut line = serde_json::to_string(req).context("Failed to serialize IPC request")?;

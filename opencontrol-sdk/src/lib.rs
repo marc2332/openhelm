@@ -6,8 +6,6 @@ pub use anyhow;
 pub use serde_json;
 pub use toml;
 
-// ─── Tool primitives ──────────────────────────────────────────────────────────
-
 /// The result of executing a tool.
 pub struct ToolOutput {
     pub success: bool,
@@ -47,8 +45,6 @@ impl ToolDefinition {
     }
 }
 
-// ─── Tool trait ───────────────────────────────────────────────────────────────
-
 /// A tool that can be invoked by the AI.
 /// Skill tools bake all required config in at construction time (via
 /// [`Skill::build_tools`]) so they need no runtime context.
@@ -58,8 +54,6 @@ pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
     async fn execute(&self, args: &Value) -> Result<ToolOutput>;
 }
-
-// ─── Skill trait ──────────────────────────────────────────────────────────────
 
 /// A skill bundles a set of related tools and knows how to configure them.
 #[async_trait]

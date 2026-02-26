@@ -45,8 +45,6 @@ pub struct TelegramUser {
     pub profile: String,
 }
 
-// ─── Profile ──────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Profile {
     /// Optional system prompt override; falls back to [ai].system_prompt
@@ -100,14 +98,10 @@ impl FsPermissions {
     }
 }
 
-// ─── AuditConfig ─────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuditConfig {
     pub log_path: String,
 }
-
-// ─── Defaults ─────────────────────────────────────────────────────────────────
 
 impl Default for Config {
     fn default() -> Self {
@@ -135,8 +129,6 @@ impl Default for Config {
         }
     }
 }
-
-// ─── Config methods ───────────────────────────────────────────────────────────
 
 impl Config {
     pub fn path() -> PathBuf {

@@ -83,8 +83,6 @@ fn format_head_response(
     out
 }
 
-// ─── Tools ────────────────────────────────────────────────────────────────────
-
 struct HttpGetTool(Arc<HttpClient>);
 
 #[async_trait]
@@ -371,8 +369,6 @@ impl Tool for HttpHeadTool {
         })
     }
 }
-
-// ─── Skill ────────────────────────────────────────────────────────────────────
 
 pub struct HttpSkill;
 
