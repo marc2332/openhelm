@@ -15,8 +15,16 @@ opencontrol-http = { path = "../opencontrol-http" }
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# HTTP client
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# AI client
+rig-core = "0.31"
+
+# Crypto provider for rustls
+rustls = "0.23"
+
+# HTTP client (for OpenRouter)
+reqwest = { version = "0.12", features = [
+  "json",
+], default-features = false, optional = true }
 
 # Telegram bot
 teloxide = { version = "0.13", features = ["macros"] }
