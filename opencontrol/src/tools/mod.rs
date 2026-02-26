@@ -74,7 +74,10 @@ pub struct SkillRegistry {
 impl SkillRegistry {
     pub fn new() -> Self {
         Self {
-            skills: vec![Box::new(opencontrol_github::GithubSkill)],
+            skills: vec![
+                Box::new(opencontrol_github::GithubSkill),
+                Box::new(opencontrol_http::HttpSkill),
+            ],
         }
     }
 
