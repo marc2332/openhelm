@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -11,10 +11,10 @@ use crate::ai::session::SessionManager;
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
 use crate::ipc::{
-    recv_request, send_response, IpcRequest, IpcResponse, PendingPair, ProfileInfo, UserInfo,
+    IpcRequest, IpcResponse, PendingPair, ProfileInfo, UserInfo, recv_request, send_response,
 };
 use crate::log_buffer::LogBuffer;
-use crate::telegram::{run_bot, BotState};
+use crate::telegram::{BotState, run_bot};
 use crate::tools::SkillRegistry;
 
 pub struct Daemon {
@@ -221,7 +221,7 @@ async fn dispatch(
                 None => {
                     return IpcResponse::Error {
                         message: format!("No pending pairing request from {}", telegram_id),
-                    }
+                    };
                 }
             };
 

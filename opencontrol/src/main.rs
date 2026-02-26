@@ -8,15 +8,15 @@ mod permissions;
 mod telegram;
 mod tools;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use ipc::{client_call, IpcRequest, IpcResponse};
+use ipc::{IpcRequest, IpcResponse, client_call};
 use log_buffer::LogBuffer;
 use std::io::{BufRead, Write};
 use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 #[command(name = "opencontrol", about = "AI-powered control service", version)]

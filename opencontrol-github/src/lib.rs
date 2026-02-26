@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use octocrab::Octocrab;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use opencontrol_sdk::{Skill, Tool, ToolDefinition, ToolOutput};
 
