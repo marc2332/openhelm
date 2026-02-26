@@ -1591,6 +1591,7 @@ dependencies = [
  "dunce",
  "futures",
  "opencontrol-github",
+ "opencontrol-http",
  "opencontrol-sdk",
  "reqwest 0.12.28",
  "serde",
@@ -1613,6 +1614,17 @@ dependencies = [
  "octocrab",
  "opencontrol-sdk",
  "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "opencontrol-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "opencontrol-sdk",
+ "reqwest 0.12.28",
  "serde_json",
  "toml",
 ]
