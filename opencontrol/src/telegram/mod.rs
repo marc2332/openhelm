@@ -9,6 +9,7 @@ use teloxide::{
     utils::command::BotCommands,
 };
 use tokio::sync::RwLock;
+use tokio::time::{Duration, sleep};
 use tracing::{error, info, warn};
 
 use crate::ai::session::SessionManager;
@@ -40,6 +41,56 @@ enum BotCommand {
     Profile,
 }
 
+/// Attempts to connect to Telegram API with exponential backoff retry logic.
+///
+/// Strategy:
+/// - Attempt 1: Immediate
+/// - Attempt 2-5: Wait 2s, 4s, 8s, 16s respectively (exponential backoff)
+/// - Total max wait time: ~30 seconds across all retries
+///
+/// Returns: Ok(bot_info) on success, Err(error_msg) if all 5 attempts fail
+async fn connect_with_retry(bot: &Bot) -> std::result::Result<teloxide::types::Me, String> {
+    const MAX_RETRIES: usize = 5;
+
+    for attempt in 1..=MAX_RETRIES {
+        info!(
+            attempt,
+            total = MAX_RETRIES,
+            "Attempting Telegram bot connection"
+        );
+
+        match bot.get_me().await {
+            Ok(me) => return Ok(me),
+            Err(e) => {
+                let error_str = e.to_string();
+
+                if attempt < MAX_RETRIES {
+                    // Exponential backoff: 2^attempt seconds (2s, 4s, 8s, 16s)
+                    let wait_seconds = 2_u64.pow(attempt as u32);
+                    warn!(
+                        attempt,
+                        total = MAX_RETRIES,
+                        error = %error_str,
+                        retry_in_seconds = wait_seconds,
+                        "Telegram connection failed, retrying"
+                    );
+                    sleep(Duration::from_secs(wait_seconds)).await;
+                } else {
+                    warn!(
+                        attempt,
+                        total = MAX_RETRIES,
+                        error = %error_str,
+                        "Telegram connection failed after all retries — bot will not start"
+                    );
+                    return Err(error_str);
+                }
+            }
+        }
+    }
+
+    unreachable!()
+}
+
 pub async fn run_bot(state: BotState) -> Result<()> {
     let token = state.config.read().await.telegram.bot_token.clone();
     if token.is_empty() {
@@ -49,15 +100,16 @@ pub async fn run_bot(state: BotState) -> Result<()> {
 
     let bot = Bot::new(token);
 
-    match bot.get_me().await {
+    // Attempt connection with exponential backoff retry logic
+    match connect_with_retry(&bot).await {
         Ok(me) => {
-            info!(username = %me.username(), "Telegram bot connected");
+            info!(username = %me.username(), "Telegram bot ready and waiting for messages");
             state
                 .bot_connected
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        Err(e) => {
-            warn!(error = %e, "Telegram bot token invalid or unreachable — bot will not start");
+        Err(_) => {
+            // Error already logged in connect_with_retry, gracefully degrade
             return Ok(());
         }
     }
