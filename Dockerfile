@@ -1,39 +1,25 @@
-# ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM rust:1.88-bookworm AS builder
-
+# ── Stage 1: Chef base ────────────────────────────────────────────────────────
+FROM rust:1.88-bookworm AS chef
+RUN cargo install cargo-chef
 WORKDIR /build
 
-# Copy manifests first for better layer caching
-COPY Cargo.toml Cargo.lock ./
-COPY opencontrol/Cargo.toml opencontrol/Cargo.toml
-COPY opencontrol-sdk/Cargo.toml opencontrol-sdk/Cargo.toml
-COPY opencontrol-github/Cargo.toml opencontrol-github/Cargo.toml
-COPY opencontrol-http/Cargo.toml opencontrol-http/Cargo.toml
+# ── Stage 2: Plan dependencies ───────────────────────────────────────────────
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Create dummy source files so cargo can resolve the dependency graph and
-# cache the (slow) dependency build in its own layer.
-RUN mkdir -p opencontrol/src opencontrol-sdk/src opencontrol-github/src opencontrol-http/src \
-    && echo "fn main() {}" > opencontrol/src/main.rs \
-    && echo "" > opencontrol-sdk/src/lib.rs \
-    && echo "" > opencontrol-github/src/lib.rs \
-    && echo "" > opencontrol-http/src/lib.rs \
-    && cargo build --release 2>/dev/null || true \
-    && rm -rf opencontrol/src opencontrol-sdk/src opencontrol-github/src opencontrol-http/src
+# ── Stage 3: Build ───────────────────────────────────────────────────────────
+FROM chef AS builder
 
-# Copy actual source code
-COPY opencontrol/ opencontrol/
-COPY opencontrol-sdk/ opencontrol-sdk/
-COPY opencontrol-github/ opencontrol-github/
-COPY opencontrol-http/ opencontrol-http/
+# Build dependencies (cached until Cargo.toml/Cargo.lock change)
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 
-# Build the real binary (touch sources so cargo recompiles all workspace crates)
-RUN touch opencontrol/src/main.rs \
-    opencontrol-sdk/src/lib.rs \
-    opencontrol-github/src/lib.rs \
-    opencontrol-http/src/lib.rs \
-    && cargo build --release
+# Build the real binary
+COPY . .
+RUN cargo build --release
 
-# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+# ── Stage 4: Runtime ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
 RUN apt-get update \
