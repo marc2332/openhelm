@@ -5,6 +5,7 @@
 AI-powered bot designed to work on different types of tasks. You talk to it via Telegram. It can act on the host system: reading files, browsing GitHub repos, and more, but limited by a configurable permission and profile system.
 
 > For sake of transparency: This project was 98% done with AI.
+> Use at your own responsibility!
 
 ---
 
