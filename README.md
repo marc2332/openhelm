@@ -142,6 +142,55 @@ log_path = "~/.local/share/opencontrol/audit.log"
 
 All filesystem paths are allowlist-controlled. Access outside configured paths is denied and logged.
 
+## Docker
+
+You can run opencontrol in a Docker container instead of installing Rust and building locally.
+
+### Build the image
+
+```sh
+docker build -t opencontrol .
+```
+
+### Run with Docker Compose (recommended)
+
+1. Create your config file:
+
+```sh
+cp opencontrol.example.toml opencontrol.toml
+# Edit opencontrol.toml with your API keys, bot token, profiles, etc.
+```
+
+2. Start the daemon:
+
+```sh
+docker compose up -d
+```
+
+The `docker-compose.yml` bind-mounts `./opencontrol.toml` into the container and persists audit logs in a named volume.
+
+3. Manage the running instance:
+
+```sh
+docker compose logs -f                                           # follow daemon logs
+docker compose exec opencontrol opencontrol status               # check daemon status
+docker compose exec opencontrol opencontrol pair list            # list pending pairs
+docker compose exec opencontrol opencontrol pair approve 123 --profile default
+docker compose exec opencontrol opencontrol users list           # list paired users
+```
+
+### Run with Docker directly
+
+```sh
+docker run -d \
+  --name opencontrol \
+  --restart unless-stopped \
+  -v ./opencontrol.toml:/root/opencontrol.toml:ro \
+  opencontrol
+```
+
+The config file is expected at `/root/opencontrol.toml` inside the container. Mount your local config there with `-v`.
+
 ## Building
 
 ```sh

@@ -1,10 +1,7 @@
 use anyhow::{Context, Result};
 use rig::{
     client::CompletionClient,
-    completion::{
-        CompletionModel, Message,
-        message::{AssistantContent, UserContent},
-    },
+    completion::{CompletionModel, Message, message::AssistantContent},
     providers::openrouter,
 };
 
@@ -35,18 +32,15 @@ impl AiClient {
     ) -> Result<ChatResponse> {
         let model = self.rig_client.completion_model(model_name);
 
-        let current_message = messages
-            .iter()
-            .rev()
-            .find_map(extract_text_content)
-            .context("No message content")?;
+        // Pass the last message as the prompt (preserves all content parts including images)
+        let current_message = messages.last().context("No message content")?.clone();
 
         let mut request = model.completion_request(current_message);
 
+        // Include history (all messages except the last one)
         let history: Vec<_> = messages
             .iter()
             .take(messages.len().saturating_sub(1))
-            .filter(|m| extract_text_content(m).is_some())
             .cloned()
             .collect();
         if !history.is_empty() {
@@ -106,19 +100,6 @@ impl AiClient {
             tool_calls,
             finish_reason,
         })
-    }
-}
-
-fn extract_text_content(msg: &Message) -> Option<String> {
-    match msg {
-        Message::User { content } => content.iter().find_map(|part| match part {
-            UserContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        }),
-        Message::Assistant { content, .. } => content.iter().find_map(|part| match part {
-            AssistantContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        }),
     }
 }
 
