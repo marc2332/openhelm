@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use ipc::{IpcRequest, IpcResponse, client_call};
 use log_buffer::LogBuffer;
+use rustls::crypto::ring::default_provider;
 use std::io::{BufRead, Write};
 use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
@@ -139,6 +140,10 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for MakeLogBufferWriter {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
+
     let cli = Cli::parse();
     let log_buf = Arc::new(LogBuffer::new(1000));
 

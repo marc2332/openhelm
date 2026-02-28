@@ -1,81 +1,145 @@
-use anyhow::{Context, Result, bail};
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use anyhow::{Context, Result};
+use rig::{
+    client::CompletionClient,
+    completion::{
+        CompletionModel, Message,
+        message::{AssistantContent, UserContent},
+    },
+    providers::openrouter,
+};
 
-// Re-export SDK types so the rest of the crate uses one definition.
 pub use opencontrol_sdk::ToolDefinition;
 
-/// An OpenAI-compatible chat message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: Role,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    /// Present when role == Tool
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-    /// Present when role == Assistant and tools are called
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-    /// Name for tool result messages
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-impl ChatMessage {
-    pub fn system(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::System,
-            content: Some(content.into()),
-            tool_call_id: None,
-            tool_calls: None,
-            name: None,
-        }
-    }
-
-    pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::User,
-            content: Some(content.into()),
-            tool_call_id: None,
-            tool_calls: None,
-            name: None,
-        }
-    }
-
+#[derive(Clone)]
+pub struct AiClient {
+    rig_client: openrouter::Client,
     #[allow(dead_code)]
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::Assistant,
-            content: Some(content.into()),
-            tool_call_id: None,
-            tool_calls: None,
-            name: None,
-        }
+    api_url: String,
+}
+
+impl AiClient {
+    pub fn new(api_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
+        let rig_client = openrouter::Client::new(api_key.into())
+            .context("Failed to create OpenRouter client")?;
+        Ok(Self {
+            rig_client,
+            api_url: api_url.into(),
+        })
     }
 
-    pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            role: Role::Tool,
-            content: Some(content.into()),
-            tool_call_id: Some(tool_call_id.into()),
-            tool_calls: None,
-            name: None,
+    pub async fn chat(
+        &self,
+        model_name: &str,
+        messages: &[Message],
+        tools: Option<&[ToolDefinition]>,
+    ) -> Result<ChatResponse> {
+        let model = self.rig_client.completion_model(model_name);
+
+        // Find the last message with text content for the prompt
+        let current_message = messages
+            .iter()
+            .rev()
+            .filter_map(extract_text_content)
+            .next()
+            .context("No message content")?;
+
+        let mut request = model.completion_request(current_message);
+
+        // Include history, filter out messages without text content
+        let history: Vec<_> = messages
+            .iter()
+            .take(messages.len().saturating_sub(1))
+            .filter(|m| extract_text_content(m).is_some())
+            .cloned()
+            .collect();
+        if !history.is_empty() {
+            request = request.messages(history);
         }
+
+        if let Some(tools) = tools {
+            if !tools.is_empty() {
+                let rig_tools: Vec<_> = tools
+                    .iter()
+                    .map(|t| rig::completion::ToolDefinition {
+                        name: t.function.name.clone(),
+                        description: t.function.description.clone(),
+                        parameters: t.function.parameters.clone(),
+                    })
+                    .collect();
+                request = request.tools(rig_tools);
+            }
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Completion error: {:?}", e))?;
+
+        let mut tool_calls_vec: Vec<ToolCall> = Vec::new();
+        let mut content_parts: Vec<String> = Vec::new();
+
+        for c in response.choice.iter() {
+            match c {
+                AssistantContent::Text(t) => content_parts.push(t.text.clone()),
+                AssistantContent::ToolCall(tc) => {
+                    tool_calls_vec.push(ToolCall {
+                        id: tc.id.clone(),
+                        kind: "function".to_string(),
+                        function: ToolCallFunction {
+                            name: tc.function.name.clone(),
+                            arguments: tc.function.arguments.to_string(),
+                        },
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        let tool_calls = if tool_calls_vec.is_empty() {
+            None
+        } else {
+            Some(tool_calls_vec)
+        };
+
+        let content = content_parts.join("");
+        let has_tool_calls = tool_calls.is_some();
+
+        Ok(ChatResponse {
+            content: if content.is_empty() {
+                None
+            } else {
+                Some(content)
+            },
+            tool_calls,
+            finish_reason: if has_tool_calls {
+                Some("tool_calls".to_string())
+            } else {
+                Some("stop".to_string())
+            },
+        })
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    System,
-    User,
-    Assistant,
-    Tool,
+fn extract_text_content(msg: &Message) -> Option<String> {
+    match msg {
+        Message::User { content } => content.iter().find_map(|c| {
+            if let UserContent::Text(t) = c {
+                Some(t.text.clone())
+            } else {
+                None
+            }
+        }),
+        Message::Assistant { content, .. } => content.iter().find_map(|c| {
+            if let AssistantContent::Text(t) = c {
+                Some(t.text.clone())
+            } else {
+                None
+            }
+        }),
+    }
 }
 
-/// A tool call requested by the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
@@ -83,91 +147,14 @@ pub struct ToolCall {
     pub function: ToolCallFunction,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolCallFunction {
     pub name: String,
     pub arguments: String,
 }
 
-/// The request body sent to the chat completions endpoint.
-#[derive(Debug, Serialize)]
-struct ChatRequest<'a> {
-    model: &'a str,
-    messages: &'a [ChatMessage],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<&'a [ToolDefinition]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<&'static str>,
-}
-
-/// The response from the chat completions endpoint.
-#[derive(Debug, Deserialize)]
 pub struct ChatResponse {
-    pub choices: Vec<Choice>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Choice {
-    pub message: ChatMessage,
+    pub content: Option<String>,
+    pub tool_calls: Option<Vec<ToolCall>>,
     pub finish_reason: Option<String>,
-}
-
-/// Thin OpenAI-compatible HTTP client.
-#[derive(Clone)]
-pub struct AiClient {
-    http: Client,
-    api_url: String,
-    api_key: String,
-}
-
-impl AiClient {
-    pub fn new(api_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
-        let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .context("Failed to build HTTP client")?;
-        Ok(Self {
-            http,
-            api_url: api_url.into(),
-            api_key: api_key.into(),
-        })
-    }
-
-    /// Send a chat completion request.
-    pub async fn chat(
-        &self,
-        model: &str,
-        messages: &[ChatMessage],
-        tools: Option<&[ToolDefinition]>,
-    ) -> Result<ChatResponse> {
-        let url = format!("{}/chat/completions", self.api_url.trim_end_matches('/'));
-
-        let tool_choice = tools.filter(|t| !t.is_empty()).map(|_| "auto");
-
-        let body = ChatRequest {
-            model,
-            messages,
-            tools: tools.filter(|t| !t.is_empty()),
-            tool_choice,
-        };
-
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .context("HTTP request to AI API failed")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            bail!("AI API returned {}: {}", status, text);
-        }
-
-        resp.json::<ChatResponse>()
-            .await
-            .context("Failed to parse AI API response")
-    }
 }

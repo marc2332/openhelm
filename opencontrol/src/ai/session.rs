@@ -4,16 +4,19 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use super::client::{AiClient, ChatMessage};
+use super::client::AiClient;
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
 use crate::tools::{SkillRegistry, ToolContext, ToolRegistry};
+use rig::completion::Message;
 
 pub struct Session {
     pub user_id: i64,
+    #[allow(dead_code)]
     pub username: String,
+    #[allow(dead_code)]
     pub channel: Channel,
-    history: Vec<ChatMessage>,
+    history: Vec<Message>,
     last_activity: std::time::Instant,
     timeout_minutes: u64,
 }
@@ -139,7 +142,7 @@ impl SessionManager {
             .get_mut(&user.telegram_id)
             .expect("session must exist")
             .history
-            .push(ChatMessage::user(user_message));
+            .push(Message::user(user_message));
 
         loop {
             let history_snapshot = self
@@ -151,7 +154,7 @@ impl SessionManager {
                 .history
                 .clone();
 
-            let mut messages = vec![ChatMessage::system(&system_prompt)];
+            let mut messages = vec![Message::user(&system_prompt)];
             messages.extend(history_snapshot);
 
             let resp = self
@@ -159,23 +162,21 @@ impl SessionManager {
                 .chat(&model, &messages, Some(&tool_defs))
                 .await?;
 
-            let choice = resp
-                .choices
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("No choices in AI response"))?;
+            let finish_reason = resp.finish_reason.as_deref().unwrap_or("stop");
+            let tool_calls = resp.tool_calls.as_deref().unwrap_or(&[]);
 
-            let assistant_msg = choice.message;
-            let finish_reason = choice.finish_reason.as_deref().unwrap_or("stop");
-            let tool_calls = assistant_msg.tool_calls.as_deref().unwrap_or(&[]);
-
-            self.sessions
-                .write()
-                .await
-                .get_mut(&user.telegram_id)
-                .expect("session must exist")
-                .history
-                .push(assistant_msg.clone());
+            // Add assistant response to history only if there's actual text
+            if let Some(text) = resp.content.as_deref() {
+                if !text.is_empty() && text != "[tool call]" {
+                    self.sessions
+                        .write()
+                        .await
+                        .get_mut(&user.telegram_id)
+                        .expect("session must exist")
+                        .history
+                        .push(Message::assistant(text));
+                }
+            }
 
             if finish_reason == "stop" || tool_calls.is_empty() {
                 self.sessions
@@ -184,7 +185,7 @@ impl SessionManager {
                     .get_mut(&user.telegram_id)
                     .expect("session must exist")
                     .touch();
-                let reply = assistant_msg.content.unwrap_or_default();
+                let reply = resp.content.unwrap_or_default();
                 let reply_preview = reply.chars().take(100).collect::<String>();
                 info!(
                     user_id = user.telegram_id,
@@ -266,7 +267,10 @@ impl SessionManager {
                     .get_mut(&user.telegram_id)
                     .expect("session must exist")
                     .history
-                    .push(ChatMessage::tool_result(&tc.id, result_content));
+                    .push(Message::user(format!(
+                        "Tool '{}' result: {}",
+                        tc.function.name, result_content
+                    )));
             }
         }
     }
