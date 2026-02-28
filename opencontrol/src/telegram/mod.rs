@@ -329,11 +329,7 @@ async fn extract_message_content(
         };
 
         let file_name = doc.file_name.as_deref().unwrap_or("unknown");
-        let extension = file_name
-            .rsplit('.')
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
+        let extension = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
 
         // Check if extension is allowed
         let is_allowed = att_cfg
@@ -343,13 +339,13 @@ async fn extract_message_content(
 
         if !is_allowed {
             return match effective_text {
-                Some(t) => {
-                    MessageContent::Parts(vec![UserContent::text(format!(
-                        "{}\n\n[A file '{}' was attached but '.{}' is not allowed. Allowed types: {}]",
-                        t, file_name, extension,
-                        att_cfg.allowed_extensions.join(", ")
-                    ))])
-                }
+                Some(t) => MessageContent::Parts(vec![UserContent::text(format!(
+                    "{}\n\n[A file '{}' was attached but '.{}' is not allowed. Allowed types: {}]",
+                    t,
+                    file_name,
+                    extension,
+                    att_cfg.allowed_extensions.join(", ")
+                ))]),
                 None => MessageContent::UserError(format!(
                     "File type '.{}' is not allowed. Allowed types: {}",
                     extension,

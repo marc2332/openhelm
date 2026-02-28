@@ -117,8 +117,10 @@ pub struct AttachmentsConfig {
     pub max_file_size_bytes: u64,
 }
 
+const DEFAULT_MAX_FILE_SIZE_BYTES: usize = 5 * 1024 * 1024; // 5 MB
+
 fn default_max_file_size() -> u64 {
-    5 * 1024 * 1024 // 5 MiB
+    DEFAULT_MAX_FILE_SIZE_BYTES as u64
 }
 
 impl Default for AttachmentsConfig {
