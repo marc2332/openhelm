@@ -22,10 +22,17 @@ pub struct DaemonConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AiConfig {
-    /// API endpoint URL.  When omitted the provider is chosen by inspecting the
-    /// key prefix: keys starting with `sk-` use OpenAI (`https://api.openai.com/v1`),
-    /// everything else defaults to OpenRouter (`https://openrouter.ai/api/v1`).
-    /// You can also point this at any OpenAI-compatible endpoint.
+    /// Explicit provider selection: `"openai"`, `"anthropic"`, or `"openrouter"`.
+    /// When omitted the provider is chosen by inspecting `api_url` and `api_key`:
+    ///   - URLs containing `api.openai.com` or `localhost` → OpenAI
+    ///   - URLs containing `api.anthropic.com` → Anthropic
+    ///   - Keys starting with `sk-ant-` (no explicit URL) → Anthropic
+    ///   - Keys starting with `sk-` (no explicit URL) → OpenAI
+    ///   - Everything else → OpenRouter
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// API endpoint URL.  When omitted a sensible default is chosen for the
+    /// resolved provider.  You can also point this at any compatible endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_url: Option<String>,
     pub api_key: String,
@@ -35,30 +42,76 @@ pub struct AiConfig {
     pub session_timeout_minutes: u64,
 }
 
+/// Supported AI provider backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderKind {
+    OpenAi,
+    Anthropic,
+    OpenRouter,
+}
+
 impl AiConfig {
     /// The default OpenRouter API URL.
     pub const OPENROUTER_URL: &'static str = "https://openrouter.ai/api/v1";
     /// The default OpenAI API URL.
     pub const OPENAI_URL: &'static str = "https://api.openai.com/v1";
+    /// The default Anthropic API URL.
+    pub const ANTHROPIC_URL: &'static str = "https://api.anthropic.com";
+
+    /// Resolve the effective provider.
+    ///
+    /// Priority:
+    ///   1. Explicit `provider` field in config.
+    ///   2. Inferred from `api_url` (if set).
+    ///   3. Inferred from `api_key` prefix.
+    ///   4. Default: OpenRouter.
+    pub fn effective_provider(&self) -> ProviderKind {
+        // 1. Explicit provider field.
+        if let Some(ref p) = self.provider {
+            return match p.to_lowercase().as_str() {
+                "openai" => ProviderKind::OpenAi,
+                "anthropic" => ProviderKind::Anthropic,
+                "openrouter" => ProviderKind::OpenRouter,
+                _ => ProviderKind::OpenRouter,
+            };
+        }
+
+        // 2. Infer from URL.
+        if let Some(ref url) = self.api_url {
+            if url.contains(Self::OPENAI_URL) || url.contains("localhost") {
+                return ProviderKind::OpenAi;
+            }
+            if url.contains(Self::ANTHROPIC_URL) {
+                return ProviderKind::Anthropic;
+            }
+            // Unknown URL — fall through to key-based heuristic.
+        }
+
+        // 3. Infer from key prefix.
+        if self.api_key.starts_with("sk-ant-") {
+            return ProviderKind::Anthropic;
+        }
+        if self.api_key.starts_with("sk-") {
+            return ProviderKind::OpenAi;
+        }
+
+        // 4. Default.
+        ProviderKind::OpenRouter
+    }
 
     /// Resolve the effective API URL.
     ///
-    /// Priority: explicit `api_url` > inferred from `api_key` prefix.
+    /// Priority: explicit `api_url` > provider-specific default.
     pub fn effective_api_url(&self) -> &str {
         if let Some(ref url) = self.api_url {
             url.as_str()
-        } else if self.api_key.starts_with("sk-") {
-            Self::OPENAI_URL
         } else {
-            Self::OPENROUTER_URL
+            match self.effective_provider() {
+                ProviderKind::OpenAi => Self::OPENAI_URL,
+                ProviderKind::Anthropic => Self::ANTHROPIC_URL,
+                ProviderKind::OpenRouter => Self::OPENROUTER_URL,
+            }
         }
-    }
-
-    /// Returns `true` when the resolved endpoint points at OpenAI
-    /// (or any URL containing `api.openai.com`).
-    pub fn is_openai(&self) -> bool {
-        self.effective_api_url().contains("api.openai.com")
-            || self.effective_api_url().contains("localhost")
     }
 }
 
@@ -173,6 +226,7 @@ impl Default for Config {
                 log_level: "info".to_string(),
             },
             ai: AiConfig {
+                provider: None,
                 api_url: None,
                 api_key: String::new(),
                 model: "gpt-4o".to_string(),

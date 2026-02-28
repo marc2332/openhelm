@@ -3,7 +3,7 @@ use futures::StreamExt;
 use rig::{
     client::CompletionClient,
     completion::{CompletionModel, Message, message::AssistantContent},
-    providers::{openai, openrouter},
+    providers::{anthropic, openai, openrouter},
     streaming::StreamedAssistantContent,
 };
 use tokio::sync::mpsc;
@@ -11,12 +11,13 @@ use tracing::{info, warn};
 
 pub use openhelm_sdk::ToolDefinition;
 
-use crate::config::AiConfig;
+use crate::config::{AiConfig, ProviderKind};
 
 #[derive(Clone)]
 enum Provider {
     OpenRouter(openrouter::Client),
     OpenAi(openai::CompletionsClient),
+    Anthropic(anthropic::Client),
 }
 
 #[derive(Clone)]
@@ -40,34 +41,54 @@ pub enum StreamEvent {
 impl AiClient {
     /// Create a new AI client.
     ///
-    /// When `ai_config.is_openai()` is true the OpenAI Completions API provider
-    /// is used; otherwise OpenRouter.  A custom `api_url` (if set) overrides the
-    /// provider's default base URL.
+    /// The provider is determined by `ai_config.effective_provider()`:
+    ///   - `ProviderKind::OpenAi` → OpenAI Completions API
+    ///   - `ProviderKind::Anthropic` → Anthropic Messages API
+    ///   - `ProviderKind::OpenRouter` → OpenRouter (default)
+    ///
+    /// A custom `api_url` (if set) overrides the provider's default base URL.
     pub fn new(ai_config: &AiConfig) -> Result<Self> {
         let api_key = &ai_config.api_key;
         let api_url = ai_config.api_url.as_deref();
 
-        let provider = if ai_config.is_openai() {
-            let mut builder = openai::CompletionsClient::builder().api_key(api_key);
-            if let Some(url) = api_url {
-                builder = builder.base_url(url);
+        let provider = match ai_config.effective_provider() {
+            ProviderKind::OpenAi => {
+                let mut builder = openai::CompletionsClient::builder().api_key(api_key);
+                if let Some(url) = api_url {
+                    builder = builder.base_url(url);
+                }
+                let client = builder.build().context("Failed to create OpenAI client")?;
+                info!(url = ai_config.effective_api_url(), "Using OpenAI provider");
+                Provider::OpenAi(client)
             }
-            let client = builder.build().context("Failed to create OpenAI client")?;
-            info!(url = ai_config.effective_api_url(), "Using OpenAI provider");
-            Provider::OpenAi(client)
-        } else {
-            let mut builder = openrouter::Client::builder().api_key(api_key);
-            if let Some(url) = api_url {
-                builder = builder.base_url(url);
+            ProviderKind::Anthropic => {
+                let mut builder = anthropic::Client::builder().api_key(api_key);
+                if let Some(url) = api_url {
+                    builder = builder.base_url(url);
+                }
+                let client = builder
+                    .build()
+                    .context("Failed to create Anthropic client")?;
+                info!(
+                    url = ai_config.effective_api_url(),
+                    "Using Anthropic provider"
+                );
+                Provider::Anthropic(client)
             }
-            let client = builder
-                .build()
-                .context("Failed to create OpenRouter client")?;
-            info!(
-                url = ai_config.effective_api_url(),
-                "Using OpenRouter provider"
-            );
-            Provider::OpenRouter(client)
+            ProviderKind::OpenRouter => {
+                let mut builder = openrouter::Client::builder().api_key(api_key);
+                if let Some(url) = api_url {
+                    builder = builder.base_url(url);
+                }
+                let client = builder
+                    .build()
+                    .context("Failed to create OpenRouter client")?;
+                info!(
+                    url = ai_config.effective_api_url(),
+                    "Using OpenRouter provider"
+                );
+                Provider::OpenRouter(client)
+            }
         };
 
         Ok(Self { provider })
@@ -90,6 +111,9 @@ impl AiClient {
                 Self::stream_with_model(client.completion_model(model_name), messages, tools).await
             }
             Provider::OpenAi(client) => {
+                Self::stream_with_model(client.completion_model(model_name), messages, tools).await
+            }
+            Provider::Anthropic(client) => {
                 Self::stream_with_model(client.completion_model(model_name), messages, tools).await
             }
         }
