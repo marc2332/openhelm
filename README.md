@@ -1,14 +1,17 @@
-# openhelm 👨🏼‍✈️
+# openhelm 🤠
 
 <img src="./logo.png" alt="openhelm logo" width="150" align="right" />
 
-AI-powered bot designed to work on different types of tasks. You talk to it via Telegram. It  act on the host system: reading files, browsing GitHub repos, and more - through a configurable permission and profile system.
+AI-powered bot designed to work on different types of tasks. You talk to it via Telegram. It can act on the host system: reading files, browsing GitHub repos, and more, but limited by a configurable permission and profile system.
+
+> For sake of transparency: This project was 98% done with AI.
 
 ---
 
 ## Table of Contents
 
 - [How it works](#how-it-works)
+- [Installation](#installation)
 - [Quick start](#quick-start)
 - [Commands](#commands)
 - [Configuration](#configuration)
@@ -27,6 +30,16 @@ Telegram user → Bot → Daemon (Unix socket) → LLM + Tools
 ```
 
 The daemon runs as a background service. Users pair their Telegram account with the bot; admins approve requests and assign a profile. Every tool call is audit-logged.
+
+---
+
+## Installation
+
+Install openhelm directly from the GitHub repository using Cargo:
+
+```sh
+cargo install --git https://github.com/marc2332/openhelm
+```
 
 ---
 
