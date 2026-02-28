@@ -169,6 +169,9 @@ mkdir    = []
 [profiles.alice.permissions.skills.github]
 token = "ghp_..."
 
+[profiles.alice.permissions.skills.http]
+# max_body_bytes = 15728640  # optional, defaults to 15 MiB
+
 [audit]
 log_path = "~/.local/share/openhelm/audit.log"
 ```
@@ -191,6 +194,12 @@ All filesystem paths are allowlist-controlled. Any access outside the configured
 | `github_list_prs` | github | List pull requests |
 | `github_get_pr` | github | Get PR diff, description, and comments |
 | `github_get_file` | github | Read a file from a repository |
+| `http_get` | http | Perform an HTTP GET request |
+| `http_post` | http | Perform an HTTP POST request with an optional JSON body |
+| `http_put` | http | Perform an HTTP PUT request with an optional JSON body |
+| `http_patch` | http | Perform an HTTP PATCH request with an optional JSON body |
+| `http_delete` | http | Perform an HTTP DELETE request |
+| `http_head` | http | Perform an HTTP HEAD request (returns status and headers only) |
 
 ---
 
