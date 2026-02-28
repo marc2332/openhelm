@@ -58,3 +58,6 @@ tokio-stream = "0.1"
 
 # Path canonicalization helper
 dunce = "1"
+
+# Base64 encoding (for image attachments)
+base64 = "0.22"

@@ -55,6 +55,8 @@ pub struct Profile {
     pub permissions: ProfilePermissions,
     /// Filesystem path allowlists; required when permissions.fs = true
     pub fs: Option<FsPermissions>,
+    /// Telegram file attachment settings
+    pub attachments: Option<AttachmentsConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -97,6 +99,40 @@ impl FsPermissions {
             || !self.mkdir.is_empty()
     }
 }
+
+/// Configuration for Telegram file attachment handling.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AttachmentsConfig {
+    /// Master switch: whether the bot processes file attachments at all.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Allowed file extensions (without leading dot, case-insensitive).
+    /// e.g. ["txt", "csv", "jpg", "png"]
+    /// Image extensions (jpg, jpeg, png, gif, webp) are sent as images to the AI.
+    /// Text extensions (txt, csv, json, log, md, etc.) are read as UTF-8 text.
+    #[serde(default)]
+    pub allowed_extensions: Vec<String>,
+    /// Maximum file size in bytes. Defaults to 5 MiB.
+    #[serde(default = "default_max_file_size")]
+    pub max_file_size_bytes: u64,
+}
+
+fn default_max_file_size() -> u64 {
+    5 * 1024 * 1024 // 5 MiB
+}
+
+impl Default for AttachmentsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allowed_extensions: vec![],
+            max_file_size_bytes: default_max_file_size(),
+        }
+    }
+}
+
+/// Well-known image extensions that are sent to the AI as image content.
+pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp"];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuditConfig {
