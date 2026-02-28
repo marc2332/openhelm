@@ -107,9 +107,10 @@ pub struct AttachmentsConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Allowed file extensions (without leading dot, case-insensitive).
-    /// e.g. ["txt", "csv", "jpg", "png"]
+    /// e.g. ["txt", "csv", "pdf", "jpg", "png"]
     /// Image extensions (jpg, jpeg, png, gif, webp) are sent as images to the AI.
-    /// Text extensions (txt, csv, json, log, md, etc.) are read as UTF-8 text.
+    /// Document extensions (txt, csv, pdf, html, md, xml, etc.) are sent as
+    /// structured document content. Unknown binary formats are sent as raw documents.
     #[serde(default)]
     pub allowed_extensions: Vec<String>,
     /// Maximum file size in bytes. Defaults to 5 MiB.

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::Utc;
-use rig::completion::message::{ImageMediaType, UserContent};
+use rig::completion::message::{DocumentMediaType, ImageMediaType, UserContent};
 use telegram_markdown_v2::convert;
 use teloxide::types::ParseMode;
 use teloxide::{net::Download, prelude::*, types::ChatAction, utils::command::BotCommands};
@@ -449,26 +449,18 @@ async fn extract_message_content(
             return MessageContent::Parts(parts);
         }
 
-        // Text-based file: try to decode as UTF-8
-        match String::from_utf8(data) {
-            Ok(content) => {
-                let mut parts = Vec::new();
-                if let Some(t) = effective_text {
-                    parts.push(UserContent::text(t));
-                }
-                parts.push(UserContent::text(format!(
-                    "File `{}`:\n```\n{}\n```",
-                    file_name, content
-                )));
-                return MessageContent::Parts(parts);
-            }
-            Err(_) => {
-                return MessageContent::UserError(format!(
-                    "Could not read '{}' as text — it may be a binary file.",
-                    file_name
-                ));
-            }
+        // Non-image file: send as a document content item.
+        let media_type = document_media_type_for_extension(&extension);
+        let mut parts = Vec::new();
+        if let Some(t) = effective_text {
+            parts.push(UserContent::text(t));
         }
+        let doc_content = match String::from_utf8(data.clone()) {
+            Ok(text) => UserContent::document(text, media_type),
+            Err(_) => UserContent::document_raw(data, media_type),
+        };
+        parts.push(doc_content);
+        return MessageContent::Parts(parts);
     }
 
     // Plain text messages
@@ -478,6 +470,24 @@ async fn extract_message_content(
 
     // Everything else (voice, sticker, video, contact, location, etc.)
     MessageContent::Unsupported
+}
+
+/// Map a file extension (lowercase, without dot) to a `DocumentMediaType`.
+/// Returns `None` for extensions that don't have a known document media type.
+fn document_media_type_for_extension(ext: &str) -> Option<DocumentMediaType> {
+    match ext {
+        "pdf" => Some(DocumentMediaType::PDF),
+        "txt" | "text" => Some(DocumentMediaType::TXT),
+        "rtf" => Some(DocumentMediaType::RTF),
+        "html" | "htm" => Some(DocumentMediaType::HTML),
+        "css" => Some(DocumentMediaType::CSS),
+        "md" | "markdown" => Some(DocumentMediaType::MARKDOWN),
+        "csv" => Some(DocumentMediaType::CSV),
+        "xml" => Some(DocumentMediaType::XML),
+        "js" => Some(DocumentMediaType::Javascript),
+        "py" => Some(DocumentMediaType::Python),
+        _ => None,
+    }
 }
 
 /// Download a file from Telegram by its `file_id`.
