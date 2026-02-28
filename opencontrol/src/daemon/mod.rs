@@ -367,7 +367,12 @@ async fn dispatch(
             };
 
             match sessions
-                .send_message(&cli_user, Channel::Cli, vec![UserContent::text(message)], &cfg_snapshot)
+                .send_message(
+                    &cli_user,
+                    Channel::Cli,
+                    vec![UserContent::text(message)],
+                    &cfg_snapshot,
+                )
                 .await
             {
                 Ok(reply) => IpcResponse::ChatReply { message: reply },

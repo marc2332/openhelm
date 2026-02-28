@@ -233,7 +233,7 @@ async fn extract_message_content(
     let caption = msg.caption().map(|c| c.to_string());
     let effective_text = text.or(caption);
 
-    // --- Photo messages ---
+    // Photo messages
     if let Some(photos) = msg.photo() {
         let att_cfg = match attachments_config {
             Some(cfg) if cfg.enabled => cfg,
@@ -313,7 +313,7 @@ async fn extract_message_content(
         }
     }
 
-    // --- Document messages ---
+    // Document messages
     if let Some(doc) = msg.document() {
         let att_cfg = match attachments_config {
             Some(cfg) if cfg.enabled => cfg,
@@ -417,7 +417,7 @@ async fn extract_message_content(
         }
     }
 
-    // --- Plain text messages ---
+    // Plain text messages
     if let Some(t) = effective_text {
         return MessageContent::Parts(vec![UserContent::text(t)]);
     }

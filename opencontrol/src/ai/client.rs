@@ -1,10 +1,7 @@
 use anyhow::{Context, Result};
 use rig::{
     client::CompletionClient,
-    completion::{
-        CompletionModel, Message,
-        message::AssistantContent,
-    },
+    completion::{CompletionModel, Message, message::AssistantContent},
     providers::openrouter,
 };
 
@@ -36,10 +33,7 @@ impl AiClient {
         let model = self.rig_client.completion_model(model_name);
 
         // Pass the last message as the prompt (preserves all content parts including images)
-        let current_message = messages
-            .last()
-            .context("No message content")?
-            .clone();
+        let current_message = messages.last().context("No message content")?.clone();
 
         let mut request = model.completion_request(current_message);
 

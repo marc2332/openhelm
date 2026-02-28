@@ -117,20 +117,10 @@ pub struct AttachmentsConfig {
     pub max_file_size_bytes: u64,
 }
 
-const DEFAULT_MAX_FILE_SIZE_BYTES: usize = 5 * 1024 * 1024; // 5 MB
+const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = 5 * 1024 * 1024; // 5 MB
 
 fn default_max_file_size() -> u64 {
-    DEFAULT_MAX_FILE_SIZE_BYTES as u64
-}
-
-impl Default for AttachmentsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            allowed_extensions: vec![],
-            max_file_size_bytes: default_max_file_size(),
-        }
-    }
+    DEFAULT_MAX_FILE_SIZE_BYTES
 }
 
 /// Well-known image extensions that are sent to the AI as image content.
