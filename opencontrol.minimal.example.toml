@@ -30,5 +30,11 @@ read_dir = ["/home/ricard/docs"]
 write = []                       # empty = operation disabled
 mkdir = []
 
+# Uncomment to enable file attachments via Telegram (photos, documents)
+# [profiles.ricard.attachments]
+# enabled = true
+# allowed_extensions = ["txt", "csv", "jpg", "jpeg", "png"]
+# max_file_size_bytes = 5242880 # 5 MiB
+
 [audit]
 log_path = "/home/ricard/.local/share/opencontrol/audit.log"

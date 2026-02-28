@@ -36,5 +36,10 @@ token = "<GITHUB_TOKEN>"
 [profiles.ricard.permissions.skills.http] # keep it empty to enable http access (or remove it to disable http access)
 max_body_bytes = 15728640 # 15 MiB
 
+[profiles.ricard.attachments]
+enabled = true
+allowed_extensions = ["txt", "csv", "jpg", "jpeg", "png", "gif", "webp"]
+max_file_size_bytes = 5242880 # 5 MiB
+
 [audit]
 log_path = "/home/ricard/.local/share/opencontrol/audit.log"
