@@ -9,6 +9,8 @@ use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
 use crate::tools::{SkillRegistry, ToolContext, ToolRegistry};
 use rig::completion::Message;
+use rig::completion::message::UserContent;
+use rig::one_or_many::OneOrMany;
 
 pub struct Session {
     pub user_id: i64,
@@ -98,7 +100,7 @@ impl SessionManager {
         &self,
         user: &TelegramUser,
         channel: Channel,
-        user_message: &str,
+        content: Vec<UserContent>,
         config: &Config,
     ) -> Result<String> {
         let profile = config.resolve_profile(&user.profile)?;
@@ -117,7 +119,18 @@ impl SessionManager {
             });
         }
 
-        let preview = user_message.chars().take(100).collect::<String>();
+        // Build a preview string for logging/audit from the first text content part
+        let preview = content
+            .iter()
+            .find_map(|c| {
+                if let UserContent::Text(t) = c {
+                    Some(t.text.chars().take(100).collect::<String>())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "[attachment]".to_string());
+
         info!(
             user_id = user.telegram_id,
             username = %user.name,
@@ -136,13 +149,19 @@ impl SessionManager {
         let tool_defs = tools.definitions_for(profile);
         let tool_context = ToolContext::from_profile(profile);
 
+        // Build the user message from content parts
+        let user_msg = Message::User {
+            content: OneOrMany::many(content)
+                .map_err(|_| anyhow::anyhow!("Empty message content"))?,
+        };
+
         self.sessions
             .write()
             .await
             .get_mut(&user.telegram_id)
             .expect("session must exist")
             .history
-            .push(Message::user(user_message));
+            .push(user_msg);
 
         loop {
             let history_snapshot = self

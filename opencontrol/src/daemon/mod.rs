@@ -2,6 +2,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use rig::completion::message::UserContent;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
@@ -366,7 +367,12 @@ async fn dispatch(
             };
 
             match sessions
-                .send_message(&cli_user, Channel::Cli, &message, &cfg_snapshot)
+                .send_message(
+                    &cli_user,
+                    Channel::Cli,
+                    vec![UserContent::text(message)],
+                    &cfg_snapshot,
+                )
                 .await
             {
                 Ok(reply) => IpcResponse::ChatReply { message: reply },
