@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::ai::client::AiClient;
-use crate::ai::session::SessionManager;
+use crate::ai::session::{SessionEvent, SessionManager};
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
 use crate::ipc::{
@@ -32,7 +32,7 @@ pub struct Daemon {
 impl Daemon {
     pub async fn new(config: Config, log_buf: Arc<LogBuffer>) -> Result<Self> {
         let audit = AuditLogger::new(&config.audit.log_path).await?;
-        let client = AiClient::new(&config.ai.api_url, &config.ai.api_key)?;
+        let client = AiClient::new(&config.ai)?;
         let skills = Arc::new(SkillRegistry::new());
         let timeout_minutes = config.ai.session_timeout_minutes;
         let sessions = Arc::new(SessionManager::new(
@@ -156,6 +156,14 @@ async fn handle_ipc_connection(
         }
     };
 
+    // Chat requests are handled specially: they stream multiple IPC
+    // responses (ChatChunk / ChatDone) over the socket instead of a
+    // single response.
+    if let IpcRequest::Chat { message, profile } = req {
+        handle_chat_streaming(&mut stream, message, profile, config, sessions).await;
+        return;
+    }
+
     let resp = dispatch(
         req,
         config,
@@ -171,6 +179,81 @@ async fn handle_ipc_connection(
     if let Err(err) = send_response(&mut stream, &resp).await {
         warn!(error = %err, "Failed to send IPC response");
     }
+}
+
+/// Handle a Chat request by streaming events over the socket.
+async fn handle_chat_streaming(
+    stream: &mut UnixStream,
+    message: String,
+    profile: String,
+    config: Arc<RwLock<Config>>,
+    sessions: Arc<SessionManager>,
+) {
+    let cfg_snapshot = config.read().await.clone();
+    if let Err(err) = cfg_snapshot.require_profile(&profile) {
+        let _ = send_response(
+            stream,
+            &IpcResponse::Error {
+                message: err.to_string(),
+            },
+        )
+        .await;
+        return;
+    }
+
+    let cli_user = TelegramUser {
+        telegram_id: 0,
+        name: "cli".to_string(),
+        profile,
+    };
+
+    let mut rx = match sessions
+        .send_message(
+            &cli_user,
+            Channel::Cli,
+            vec![UserContent::text(message)],
+            &cfg_snapshot,
+        )
+        .await
+    {
+        Ok(rx) => rx,
+        Err(err) => {
+            let _ = send_response(
+                stream,
+                &IpcResponse::Error {
+                    message: err.to_string(),
+                },
+            )
+            .await;
+            return;
+        }
+    };
+
+    // Drain the session event channel, forwarding events as streaming
+    // IPC responses.
+    while let Some(event) = rx.recv().await {
+        let resp = match event {
+            SessionEvent::Typing => continue,
+            SessionEvent::Chunk(text) => IpcResponse::ChatChunk { text },
+            SessionEvent::Message(text) => IpcResponse::ChatChunk { text },
+            SessionEvent::Done(_) => IpcResponse::ChatDone,
+            SessionEvent::Error(err) => IpcResponse::Error {
+                message: err.to_string(),
+            },
+        };
+
+        if send_response(stream, &resp).await.is_err() {
+            return;
+        }
+
+        // After ChatDone or Error we're finished.
+        if matches!(resp, IpcResponse::ChatDone | IpcResponse::Error { .. }) {
+            return;
+        }
+    }
+
+    // Channel closed without a Done event - send ChatDone as a safety net.
+    let _ = send_response(stream, &IpcResponse::ChatDone).await;
 }
 
 async fn dispatch(
@@ -358,35 +441,9 @@ async fn dispatch(
             IpcResponse::ProfilesList { profiles }
         }
 
-        IpcRequest::Chat { message, profile } => {
-            let cfg_snapshot = config.read().await.clone();
-            if let Err(err) = cfg_snapshot.require_profile(&profile) {
-                return IpcResponse::Error {
-                    message: err.to_string(),
-                };
-            }
-
-            let cli_user = TelegramUser {
-                telegram_id: 0,
-                name: "cli".to_string(),
-                profile,
-            };
-
-            match sessions
-                .send_message(
-                    &cli_user,
-                    Channel::Cli,
-                    vec![UserContent::text(message)],
-                    &cfg_snapshot,
-                )
-                .await
-            {
-                Ok(reply) => IpcResponse::ChatReply { message: reply },
-                Err(err) => IpcResponse::Error {
-                    message: err.to_string(),
-                },
-            }
-        }
+        // Chat requests are handled before dispatch() via
+        // handle_chat_streaming(), so this arm is unreachable.
+        IpcRequest::Chat { .. } => unreachable!("Chat handled in handle_ipc_connection"),
 
         IpcRequest::ChatReset { profile } => {
             let _ = profile;

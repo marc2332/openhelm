@@ -75,7 +75,7 @@ struct LogEntry<'a> {
     event: &'a AuditEvent,
 }
 
-/// Handle to the audit logger. Clone freely — backed by an async channel.
+/// Handle to the audit logger. Clone freely - backed by an async channel.
 #[derive(Clone)]
 pub struct AuditLogger {
     tx: mpsc::UnboundedSender<AuditEvent>,
@@ -98,7 +98,7 @@ impl AuditLogger {
     /// Fire-and-forget: log an audit event.
     pub fn log(&self, event: AuditEvent) {
         if self.tx.send(event).is_err() {
-            warn!("Audit logger channel closed — event dropped");
+            warn!("Audit logger channel closed - event dropped");
         }
     }
 }

@@ -8,10 +8,10 @@ use telegram_markdown_v2::convert;
 use teloxide::types::ParseMode;
 use teloxide::{net::Download, prelude::*, types::ChatAction, utils::command::BotCommands};
 use tokio::sync::RwLock;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, Instant, sleep};
 use tracing::{error, info, warn};
 
-use crate::ai::session::SessionManager;
+use crate::ai::session::{SessionEvent, SessionManager};
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{AttachmentsConfig, Config, IMAGE_EXTENSIONS};
 use crate::ipc::PendingPair;
@@ -79,7 +79,7 @@ async fn connect_with_retry(bot: &Bot) -> std::result::Result<teloxide::types::M
                         attempt,
                         total = MAX_RETRIES,
                         error = %error_str,
-                        "Telegram connection failed after all retries — bot will not start"
+                        "Telegram connection failed after all retries - bot will not start"
                     );
                     return Err(error_str);
                 }
@@ -93,7 +93,7 @@ async fn connect_with_retry(bot: &Bot) -> std::result::Result<teloxide::types::M
 pub async fn run_bot(state: BotState) -> Result<()> {
     let token = state.config.read().await.telegram.bot_token.clone();
     if token.is_empty() {
-        warn!("No Telegram bot token configured — bot will not start");
+        warn!("No Telegram bot token configured - bot will not start");
         return Ok(());
     }
 
@@ -151,8 +151,8 @@ async fn command_handler(
                 bot.send_message(
                     msg.chat.id,
                     "Welcome back! Send me a message and I'll help you.\n\
-                    /reset — clear conversation history\n\
-                    /profile — show your profile and permissions",
+                    /reset - clear conversation history\n\
+                    /profile - show your profile and permissions",
                 )
                 .await?;
             } else {
@@ -238,7 +238,7 @@ async fn command_handler(
                                 lines.push(format!("    mkdir:\n{}", fmt_paths(&fs.mkdir)));
                             } else {
                                 lines.push(
-                                    "    (no paths configured — all operations denied)".to_string(),
+                                    "    (no paths configured - all operations denied)".to_string(),
                                 );
                             }
                         } else {
@@ -552,30 +552,12 @@ async fn message_handler(
     bot.send_chat_action(msg.chat.id, ChatAction::Typing)
         .await?;
 
-    match state
+    let mut rx = match state
         .sessions
         .send_message(&user, Channel::Telegram, parts, &config_snapshot)
         .await
     {
-        Ok(reply) => match convert(&reply) {
-            Ok(converted) => {
-                for chunk in split_message(&converted, 4096) {
-                    if !chunk.is_empty() {
-                        bot.send_message(msg.chat.id, chunk)
-                            .parse_mode(ParseMode::MarkdownV2)
-                            .await?;
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to convert markdown, sending as plain text");
-                for chunk in split_message(&reply, 4096) {
-                    if !chunk.is_empty() {
-                        bot.send_message(msg.chat.id, chunk).await?;
-                    }
-                }
-            }
-        },
+        Ok(rx) => rx,
         Err(err) => {
             error!(error = %err, user_id = user_id, "AI session error");
             let converted = convert(&format!("Error: {}", err))
@@ -583,9 +565,148 @@ async fn message_handler(
             bot.send_message(msg.chat.id, converted)
                 .parse_mode(ParseMode::MarkdownV2)
                 .await?;
+            return Ok(());
+        }
+    };
+
+    // Drain the event channel. Each Typing event refreshes the indicator;
+    // each Message event is sent immediately; Chunk events are accumulated
+    // and only flushed after 12 seconds have passed since the first message
+    // was sent, so short responses arrive as a single nicely-formatted
+    // message while long ones give periodic progress updates.
+    // Done sends any remaining buffered text; Error reports the failure.
+    let mut had_intermediate = false;
+    let mut chunk_buffer = String::new();
+    let mut last_flush: Option<Instant> = None;
+    info!(user_id = user_id, "Waiting for session events");
+    while let Some(event) = rx.recv().await {
+        match event {
+            SessionEvent::Typing => {
+                // Refresh the typing indicator - best effort, ignore errors.
+                let _ = bot.send_chat_action(msg.chat.id, ChatAction::Typing).await;
+            }
+            SessionEvent::Chunk(text) => {
+                chunk_buffer.push_str(&text);
+                // Only start the timer once we've sent the first intermediate
+                // message, so the very first response is never fragmented.
+                // After that, flush every 12 seconds.
+                let should_flush = last_flush
+                    .map(|t| t.elapsed() >= Duration::from_secs(12))
+                    .unwrap_or(false);
+                if should_flush && !chunk_buffer.is_empty() {
+                    let flush = chunk_buffer.drain(..).collect::<String>();
+                    had_intermediate = true;
+                    last_flush = Some(Instant::now());
+                    if let Err(e) = send_text(&bot, msg.chat.id, flush.trim()).await {
+                        warn!(error = %e, "Failed to send chunk message");
+                    }
+                    // Refresh typing indicator after sending
+                    let _ = bot.send_chat_action(msg.chat.id, ChatAction::Typing).await;
+                }
+            }
+            SessionEvent::Message(text) => {
+                // Flush any pending chunks first
+                if !chunk_buffer.is_empty() {
+                    let flush = chunk_buffer.drain(..).collect::<String>();
+                    if let Err(e) = send_text(&bot, msg.chat.id, flush.trim()).await {
+                        warn!(error = %e, "Failed to send buffered chunk message");
+                    }
+                }
+                had_intermediate = true;
+                // Start the 12-second timer after the first intermediate
+                // message so subsequent chunks can be flushed periodically.
+                last_flush = Some(Instant::now());
+                if let Err(e) = send_text(&bot, msg.chat.id, &text).await {
+                    warn!(error = %e, "Failed to send intermediate message");
+                }
+            }
+            SessionEvent::Done(reply) => {
+                // Combine any remaining buffered chunks with the final reply
+                let mut final_text = String::new();
+                if !chunk_buffer.is_empty() {
+                    final_text.push_str(chunk_buffer.trim());
+                }
+                if !reply.is_empty() {
+                    if !final_text.is_empty() {
+                        final_text.push_str("\n\n");
+                    }
+                    final_text.push_str(&reply);
+                }
+
+                info!(
+                    user_id = user_id,
+                    reply_len = final_text.len(),
+                    had_intermediate,
+                    "Received Done event"
+                );
+                // Only send the final reply if it has content. If intermediate
+                // messages were already sent and the final reply is empty,
+                // there is nothing more to say.
+                if !final_text.is_empty() || !had_intermediate {
+                    if let Err(e) = send_text(&bot, msg.chat.id, &final_text).await {
+                        warn!(error = %e, "Failed to send final reply");
+                    }
+                }
+            }
+            SessionEvent::Error(err) => {
+                error!(error = %err, user_id = user_id, "AI session error");
+                let converted = convert(&format!("Error: {}", err))
+                    .unwrap_or_else(|_| "Error: Something went wrong.".to_string());
+                let _ = bot
+                    .send_message(msg.chat.id, converted)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await;
+            }
         }
     }
 
+    Ok(())
+}
+
+/// Send `text` to `chat_id`, splitting into ≤4096-char chunks and trying
+/// MarkdownV2 first, falling back to plain text on parse failure or if
+/// Telegram rejects the escaped message.
+async fn send_text(
+    bot: &Bot,
+    chat_id: teloxide::types::ChatId,
+    text: &str,
+) -> Result<(), teloxide::RequestError> {
+    match convert(text) {
+        Ok(converted) => {
+            for chunk in split_message(&converted, 4096) {
+                if !chunk.is_empty() {
+                    if let Err(e) = bot
+                        .send_message(chat_id, chunk)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await
+                    {
+                        warn!(error = %e, "MarkdownV2 rejected by Telegram, retrying as plain text");
+                        send_plain(bot, chat_id, text).await?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to convert markdown, sending as plain text");
+            send_plain(bot, chat_id, text).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Send `text` as plain text (no markdown parsing), splitting into ≤4096-char
+/// chunks.  Used for streaming chunks that may contain partial/broken markdown.
+async fn send_plain(
+    bot: &Bot,
+    chat_id: teloxide::types::ChatId,
+    text: &str,
+) -> Result<(), teloxide::RequestError> {
+    for chunk in split_message(text, 4096) {
+        if !chunk.is_empty() {
+            bot.send_message(chat_id, chunk).await?;
+        }
+    }
     Ok(())
 }
 

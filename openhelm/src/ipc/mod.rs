@@ -15,7 +15,7 @@ pub enum IpcRequest {
     PairList,
     PairApprove {
         telegram_id: i64,
-        /// Profile name — must exist in config or daemon returns an error
+        /// Profile name - must exist in config or daemon returns an error
         profile: String,
     },
     PairReject {
@@ -77,9 +77,16 @@ pub enum IpcResponse {
     ChatReply {
         message: String,
     },
+    /// A streaming text chunk (token-level delta).  Multiple `ChatChunk`
+    /// events may be sent before a final `ChatDone`.
+    ChatChunk {
+        text: String,
+    },
+    /// Signals the end of a streaming chat response.
+    ChatDone,
     Logs {
         lines: Vec<String>,
-        /// New total count — pass back as `offset` on next poll
+        /// New total count - pass back as `offset` on next poll
         total: usize,
     },
 }
@@ -153,4 +160,35 @@ pub async fn client_call(socket_path: &str, req: &IpcRequest) -> Result<IpcRespo
     })?;
     send_request(&mut stream, req).await?;
     recv_response(&mut stream).await
+}
+
+/// Open a connection and return the raw stream so the caller can read
+/// multiple streaming responses (e.g. `ChatChunk` events followed by
+/// `ChatDone`).
+pub async fn client_stream(
+    socket_path: &str,
+    req: &IpcRequest,
+) -> Result<tokio::io::BufReader<UnixStream>> {
+    let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
+        format!("Cannot connect to daemon socket at {socket_path}. Is the daemon running?")
+    })?;
+    send_request(&mut stream, req).await?;
+    Ok(tokio::io::BufReader::new(stream))
+}
+
+/// Read the next `IpcResponse` from a buffered reader.  Returns `None` at
+/// EOF (connection closed).
+pub async fn recv_response_from<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> Result<Option<IpcResponse>> {
+    let mut line = String::new();
+    let n = reader
+        .read_line(&mut line)
+        .await
+        .context("Failed to read IPC response")?;
+    if n == 0 {
+        return Ok(None);
+    }
+    let resp = serde_json::from_str(line.trim()).context("Failed to parse IPC response")?;
+    Ok(Some(resp))
 }

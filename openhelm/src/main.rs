@@ -10,7 +10,7 @@ mod tools;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use ipc::{IpcRequest, IpcResponse, client_call};
+use ipc::{IpcRequest, IpcResponse, client_call, client_stream, recv_response_from};
 use log_buffer::LogBuffer;
 use rustls::crypto::ring::default_provider;
 use std::io::{BufRead, Write};
@@ -260,18 +260,19 @@ async fn cmd_setup(
         }
     }
 
-    let api_url = api_url.unwrap_or_else(|| {
-        if has_cli_args {
-            "https://openrouter.ai/api/v1".to_string()
-        } else {
-            let input: String = Input::new()
-                .with_prompt("API URL")
-                .default("https://openrouter.ai/api/v1".to_string())
-                .interact()
-                .unwrap();
-            input
-        }
-    });
+    let api_url: Option<String> = if api_url.is_some() {
+        api_url
+    } else if has_cli_args {
+        // CLI mode without explicit --api-url → leave as None (auto-detect)
+        None
+    } else {
+        let input: String = Input::new()
+            .with_prompt("API URL (leave empty to auto-detect from key)")
+            .default(String::new())
+            .interact()
+            .unwrap();
+        if input.is_empty() { None } else { Some(input) }
+    };
 
     let api_key = if let Some(key) = api_key {
         key
@@ -740,7 +741,7 @@ async fn cmd_profiles_list() -> Result<()> {
                     println!("      write:    {}", fmt_paths(&fs.write));
                     println!("      mkdir:    {}", fmt_paths(&fs.mkdir));
                 } else if profile.fs_enabled {
-                    println!("      (no [fs] table — all paths denied)");
+                    println!("      (no [fs] table - all paths denied)");
                 }
                 println!();
             }
@@ -848,18 +849,53 @@ async fn cmd_chat(profile: String) -> Result<()> {
             continue;
         }
 
-        match client_call(
+        let mut reader = client_stream(
             &socket,
             &IpcRequest::Chat {
                 message: input.to_string(),
                 profile: profile.clone(),
             },
         )
-        .await?
-        {
-            IpcResponse::ChatReply { message } => println!("\nAssistant: {}\n", message),
-            IpcResponse::Error { message } => eprintln!("Error: {}", message),
-            _ => eprintln!("Unexpected response"),
+        .await?;
+
+        print!("\nAssistant: ");
+        stdout.flush()?;
+
+        let mut got_content = false;
+        loop {
+            match recv_response_from(&mut reader).await? {
+                Some(IpcResponse::ChatChunk { text }) => {
+                    got_content = true;
+                    print!("{}", text);
+                    stdout.flush()?;
+                }
+                Some(IpcResponse::ChatDone) => {
+                    if got_content {
+                        println!("\n");
+                    } else {
+                        println!("(no response)\n");
+                    }
+                    break;
+                }
+                Some(IpcResponse::Error { message }) => {
+                    if got_content {
+                        println!();
+                    }
+                    eprintln!("Error: {}\n", message);
+                    break;
+                }
+                Some(_) => {
+                    eprintln!("Unexpected response\n");
+                    break;
+                }
+                None => {
+                    // Connection closed without ChatDone
+                    if got_content {
+                        println!("\n");
+                    }
+                    break;
+                }
+            }
         }
     }
     Ok(())
