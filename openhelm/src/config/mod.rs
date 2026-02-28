@@ -78,10 +78,10 @@ impl AiConfig {
 
         // 2. Infer from URL.
         if let Some(ref url) = self.api_url {
-            if url.contains("api.openai.com") || url.contains("localhost") {
+            if url.contains(Self::OPENAI_URL) || url.contains("localhost") {
                 return ProviderKind::OpenAi;
             }
-            if url.contains("api.anthropic.com") {
+            if url.contains(Self::ANTHROPIC_URL) {
                 return ProviderKind::Anthropic;
             }
             // Unknown URL — fall through to key-based heuristic.
