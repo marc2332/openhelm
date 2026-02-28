@@ -474,6 +474,7 @@ async fn cmd_setup(
             log_level: "info".to_string(),
         },
         ai: config::AiConfig {
+            provider: None,
             api_url,
             api_key,
             model,

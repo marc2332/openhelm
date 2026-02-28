@@ -6,8 +6,9 @@ socket_path = "/tmp/openhelm.sock"
 log_level = "info"
 
 [ai]
+# provider = "openrouter"  # "openai", "anthropic", or "openrouter" (auto-detected if omitted)
 api_url = "https://openrouter.ai/api/v1"
-api_key = "<API_KET>"
+api_key = "<API_KEY>"
 model = "<MODEL>"
 system_prompt = """
 You are a helpful assistant with access to tools on the host system.
