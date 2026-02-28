@@ -5,7 +5,7 @@ use rig::{
     providers::openrouter,
 };
 
-pub use opencontrol_sdk::ToolDefinition;
+pub use openhelm_sdk::ToolDefinition;
 
 #[derive(Clone)]
 pub struct AiClient {

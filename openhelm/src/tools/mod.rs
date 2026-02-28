@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::ai::client::ToolDefinition;
 use crate::config::{FsPermissions, Profile};
-use opencontrol_sdk::Skill;
+use openhelm_sdk::Skill;
 
 pub struct ToolOutput {
     pub success: bool,
@@ -33,7 +33,7 @@ impl ToolContext {
     }
 }
 
-struct SdkToolAdapter(Box<dyn opencontrol_sdk::Tool>);
+struct SdkToolAdapter(Box<dyn openhelm_sdk::Tool>);
 
 #[async_trait]
 impl Tool for SdkToolAdapter {
@@ -68,8 +68,8 @@ impl SkillRegistry {
     pub fn new() -> Self {
         Self {
             skills: vec![
-                Box::new(opencontrol_github::GithubSkill),
-                Box::new(opencontrol_http::HttpSkill),
+                Box::new(openhelm_github::GithubSkill),
+                Box::new(openhelm_http::HttpSkill),
             ],
         }
     }

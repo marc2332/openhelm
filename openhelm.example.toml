@@ -1,8 +1,8 @@
-# OpenControl configuration
-# Copy to $HOME/opencontrol.toml and fill in your values.
+# openhelm configuration
+# Copy to $HOME/openhelm.toml and fill in your values.
 
 [daemon]
-socket_path = "/tmp/opencontrol.sock"
+socket_path = "/tmp/openhelm.sock"
 log_level = "info"
 
 [ai]
@@ -42,4 +42,4 @@ allowed_extensions = ["txt", "csv", "jpg", "jpeg", "png", "gif", "webp"]
 max_file_size_bytes = 5242880                                            # 5 MiB
 
 [audit]
-log_path = "/home/ricard/.local/share/opencontrol/audit.log"
+log_path = "/home/ricard/.local/share/openhelm/audit.log"

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{Value, json};
 
-use opencontrol_sdk::{Skill, Tool, ToolDefinition, ToolOutput};
+use openhelm_sdk::{Skill, Tool, ToolDefinition, ToolOutput};
 
 const DEFAULT_MAX_BODY_BYTES: usize = 15 * 1024 * 1024; // 15 MB
 
@@ -17,7 +17,7 @@ struct HttpClient {
 impl HttpClient {
     fn new(max_body_bytes: usize) -> Self {
         let client = Client::builder()
-            .user_agent("opencontrol-http/0.1.0")
+            .user_agent("openhelm-http/0.1.0")
             .build()
             .expect("Failed to build HTTP client");
         Self {

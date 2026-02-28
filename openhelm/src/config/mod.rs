@@ -136,7 +136,7 @@ impl Default for Config {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
         Self {
             daemon: DaemonConfig {
-                socket_path: "/tmp/opencontrol.sock".to_string(),
+                socket_path: "/tmp/openhelm.sock".to_string(),
                 log_level: "info".to_string(),
             },
             ai: AiConfig {
@@ -151,7 +151,7 @@ impl Default for Config {
                 users: vec![],
             },
             audit: AuditConfig {
-                log_path: format!("{}/.local/share/opencontrol/audit.log", home),
+                log_path: format!("{}/.local/share/openhelm/audit.log", home),
             },
             profiles: HashMap::new(),
         }
@@ -161,7 +161,7 @@ impl Default for Config {
 impl Config {
     pub fn path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        PathBuf::from(home).join("opencontrol.toml")
+        PathBuf::from(home).join("openhelm.toml")
     }
 
     pub async fn load() -> Result<Self> {

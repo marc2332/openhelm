@@ -26,13 +26,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/opencontrol /usr/local/bin/opencontrol
+COPY --from=builder /build/target/release/openhelm /usr/local/bin/openhelm
 
 # Pre-create the data directory for audit logs
-RUN mkdir -p /root/.local/share/opencontrol
+RUN mkdir -p /root/.local/share/openhelm
 
-# Config file is expected at /root/opencontrol.toml -- mount it at runtime:
-#   docker run -v ./opencontrol.toml:/root/opencontrol.toml:ro ...
+# Config file is expected at /root/openhelm.toml -- mount it at runtime:
+#   docker run -v ./openhelm.toml:/root/openhelm.toml:ro ...
 
-ENTRYPOINT ["opencontrol"]
+ENTRYPOINT ["openhelm"]
 CMD ["start"]

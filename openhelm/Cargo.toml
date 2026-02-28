@@ -1,16 +1,16 @@
 [package]
-name = "opencontrol"
+name = "openhelm"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "opencontrol"
+name = "openhelm"
 path = "src/main.rs"
 
 [dependencies]
-opencontrol-sdk = { path = "../opencontrol-sdk" }
-opencontrol-github = { path = "../opencontrol-github" }
-opencontrol-http = { path = "../opencontrol-http" }
+openhelm-sdk = { path = "../openhelm-sdk" }
+openhelm-github = { path = "../openhelm-github" }
+openhelm-http = { path = "../openhelm-http" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

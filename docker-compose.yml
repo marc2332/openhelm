@@ -1,14 +1,14 @@
 services:
-  opencontrol:
+  openhelm:
     build: .
-    container_name: opencontrol
+    container_name: openhelm
     restart: unless-stopped
     volumes:
       # Mount your config file (required).
-      # Copy opencontrol.example.toml to opencontrol.toml and fill in your values.
-      - ./opencontrol.toml:/root/opencontrol.toml:ro
+      # Copy openhelm.example.toml to openhelm.toml and fill in your values.
+      - ./openhelm.toml:/root/openhelm.toml:ro
       # Persist audit logs across container restarts
-      - opencontrol-data:/root/.local/share/opencontrol
+      - openhelm-data:/root/.local/share/openhelm
 
 volumes:
-  opencontrol-data:
+  openhelm-data:

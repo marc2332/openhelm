@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use octocrab::Octocrab;
 use serde_json::{Value, json};
 
-use opencontrol_sdk::{Skill, Tool, ToolDefinition, ToolOutput};
+use openhelm_sdk::{Skill, Tool, ToolDefinition, ToolOutput};
 
 fn repo_arg(args: &Value) -> Result<(String, String)> {
     let repo = args["repo"]

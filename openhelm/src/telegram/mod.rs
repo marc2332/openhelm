@@ -180,7 +180,7 @@ async fn command_handler(
                     msg.chat.id,
                     "Hi! Your pairing request has been submitted.\n\
                     An administrator will approve your access shortly.\n\
-                    Run `opencontrol pair list` on the server to see pending requests.",
+                    Run `openhelm pair list` on the server to see pending requests.",
                 )
                 .await?;
             }

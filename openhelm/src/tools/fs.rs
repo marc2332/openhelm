@@ -38,7 +38,7 @@ fn check_allowed(path: &Path, allowed: &[String], operation: &str) -> Result<()>
     if allowed.is_empty() {
         bail!(
             "Operation '{}' is not permitted: no paths are configured for this operation in the profile. \
-            Add paths under [profiles.<name>.fs].{} in opencontrol.toml",
+            Add paths under [profiles.<name>.fs].{} in openhelm.toml",
             operation,
             operation
         );

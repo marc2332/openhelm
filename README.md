@@ -1,4 +1,4 @@
-# opencontrol
+# openhelm
 
 An AI-powered daemon that bridges a Telegram bot with any OpenAI-compatible LLM. Authorized users chat with an AI assistant that can act on the host system — reading files, browsing GitHub repos, and more — through a configurable permission system.
 
@@ -15,11 +15,11 @@ The daemon runs as a background service. Users pair their Telegram account; admi
 ## Setup
 
 ```sh
-# Interactive wizard — creates ~/opencontrol.toml
-opencontrol setup
+# Interactive wizard — creates ~/openhelm.toml
+openhelm setup
 
 # Or non-interactive
-opencontrol setup \
+openhelm setup \
   --api-key sk-... \
   --api-url https://openrouter.ai/api/v1 \
   --model gpt-4o \
@@ -30,10 +30,10 @@ opencontrol setup \
   --fs-list ~/docs
 
 # Install as a systemd user service
-opencontrol install-service
+openhelm install-service
 
 # Start manually (foreground)
-opencontrol start
+openhelm start
 ```
 
 ## Commands
@@ -41,28 +41,28 @@ opencontrol start
 ### Daemon
 
 ```sh
-opencontrol start            # Run the daemon in the foreground
-opencontrol stop             # Shut down the running daemon
-opencontrol restart          # Restart via systemctl
-opencontrol status           # Uptime, sessions, Telegram connection, paired users
+openhelm start            # Run the daemon in the foreground
+openhelm stop             # Shut down the running daemon
+openhelm restart          # Restart via systemctl
+openhelm status           # Uptime, sessions, Telegram connection, paired users
 ```
 
 ### Logs & Audit
 
 ```sh
-opencontrol logs             # Last 50 log lines
-opencontrol logs -f          # Follow live log output
-opencontrol logs -n 100      # Show last 100 lines
+openhelm logs             # Last 50 log lines
+openhelm logs -f          # Follow live log output
+openhelm logs -n 100      # Show last 100 lines
 
-opencontrol audit            # Last 50 audit entries (JSONL)
-opencontrol audit -f         # Follow audit log in real time
-opencontrol audit --user 42  # Filter by Telegram user ID
+openhelm audit            # Last 50 audit entries (JSONL)
+openhelm audit -f         # Follow audit log in real time
+openhelm audit --user 42  # Filter by Telegram user ID
 ```
 
 ### Chat (local REPL)
 
 ```sh
-opencontrol chat --profile default
+openhelm chat --profile default
 ```
 
 In-session commands: `/reset` clears history, `exit` or `quit` ends the session.
@@ -71,30 +71,30 @@ In-session commands: `/reset` clears history, `exit` or `quit` ends the session.
 
 ```sh
 # When a Telegram user sends /start to the bot, they appear here:
-opencontrol pair list
+openhelm pair list
 
 # Approve and assign a profile
-opencontrol pair approve 123456789 --profile default
+openhelm pair approve 123456789 --profile default
 
 # Reject a request
-opencontrol pair reject 123456789
+openhelm pair reject 123456789
 
 # List all paired users
-opencontrol users list
+openhelm users list
 
 # Remove a user and reset their session
-opencontrol users remove 123456789
+openhelm users remove 123456789
 ```
 
 ### Profiles
 
 ```sh
-opencontrol profiles list    # Show all profiles with permissions and FS paths
+openhelm profiles list    # Show all profiles with permissions and FS paths
 ```
 
 ## Configuration
 
-`~/opencontrol.toml` — copy from `opencontrol.example.toml`.
+`~/openhelm.toml` — copy from `openhelm.example.toml`.
 
 ```toml
 [ai]
@@ -122,7 +122,7 @@ mkdir    = []
 token = "ghp_..."
 
 [audit]
-log_path = "~/.local/share/opencontrol/audit.log"
+log_path = "~/.local/share/openhelm/audit.log"
 ```
 
 ## Tools
@@ -144,12 +144,12 @@ All filesystem paths are allowlist-controlled. Access outside configured paths i
 
 ## Docker
 
-You can run opencontrol in a Docker container instead of installing Rust and building locally.
+You can run openhelm in a Docker container instead of installing Rust and building locally.
 
 ### Build the image
 
 ```sh
-docker build -t opencontrol .
+docker build -t openhelm .
 ```
 
 ### Run with Docker Compose (recommended)
@@ -157,8 +157,8 @@ docker build -t opencontrol .
 1. Create your config file:
 
 ```sh
-cp opencontrol.example.toml opencontrol.toml
-# Edit opencontrol.toml with your API keys, bot token, profiles, etc.
+cp openhelm.example.toml openhelm.toml
+# Edit openhelm.toml with your API keys, bot token, profiles, etc.
 ```
 
 2. Start the daemon:
@@ -167,29 +167,29 @@ cp opencontrol.example.toml opencontrol.toml
 docker compose up -d
 ```
 
-The `docker-compose.yml` bind-mounts `./opencontrol.toml` into the container and persists audit logs in a named volume.
+The `docker-compose.yml` bind-mounts `./openhelm.toml` into the container and persists audit logs in a named volume.
 
 3. Manage the running instance:
 
 ```sh
 docker compose logs -f                                           # follow daemon logs
-docker compose exec opencontrol opencontrol status               # check daemon status
-docker compose exec opencontrol opencontrol pair list            # list pending pairs
-docker compose exec opencontrol opencontrol pair approve 123 --profile default
-docker compose exec opencontrol opencontrol users list           # list paired users
+docker compose exec openhelm openhelm status               # check daemon status
+docker compose exec openhelm openhelm pair list            # list pending pairs
+docker compose exec openhelm openhelm pair approve 123 --profile default
+docker compose exec openhelm openhelm users list           # list paired users
 ```
 
 ### Run with Docker directly
 
 ```sh
 docker run -d \
-  --name opencontrol \
+  --name openhelm \
   --restart unless-stopped \
-  -v ./opencontrol.toml:/root/opencontrol.toml:ro \
-  opencontrol
+  -v ./openhelm.toml:/root/openhelm.toml:ro \
+  openhelm
 ```
 
-The config file is expected at `/root/opencontrol.toml` inside the container. Mount your local config there with `-v`.
+The config file is expected at `/root/openhelm.toml` inside the container. Mount your local config there with `-v`.
 
 ## Building
 
@@ -197,4 +197,4 @@ The config file is expected at `/root/opencontrol.toml` inside the container. Mo
 cargo build --release
 ```
 
-Requires Rust stable. The workspace has three crates: `opencontrol` (binary), `opencontrol-sdk` (plugin API), `opencontrol-github` (GitHub skill).
+Requires Rust stable. The workspace has three crates: `openhelm` (binary), `openhelm-sdk` (plugin API), `openhelm-github` (GitHub skill).

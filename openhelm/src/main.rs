@@ -20,7 +20,7 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
-#[command(name = "opencontrol", about = "AI-powered control service", version)]
+#[command(name = "openhelm", about = "AI-powered control service", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -147,8 +147,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let log_buf = Arc::new(LogBuffer::new(1000));
 
-    let env_filter =
-        EnvFilter::from_default_env().add_directive("opencontrol=info".parse().unwrap());
+    let env_filter = EnvFilter::from_default_env().add_directive("openhelm=info".parse().unwrap());
 
     tracing_subscriber::registry()
         .with(
@@ -161,7 +160,7 @@ async fn main() -> Result<()> {
             tracing_subscriber::fmt::layer()
                 .with_target(true)
                 .with_writer(MakeLogBufferWriter(log_buf.clone()))
-                .with_filter(EnvFilter::new("opencontrol=info")),
+                .with_filter(EnvFilter::new("openhelm=info")),
         )
         .init();
 
@@ -470,7 +469,7 @@ async fn cmd_setup(
 
     let cfg = config::Config {
         daemon: config::DaemonConfig {
-            socket_path: "/tmp/opencontrol.sock".to_string(),
+            socket_path: "/tmp/openhelm.sock".to_string(),
             log_level: "info".to_string(),
         },
         ai: config::AiConfig {
@@ -485,7 +484,7 @@ async fn cmd_setup(
             users: vec![],
         },
         audit: config::AuditConfig {
-            log_path: format!("{}/.local/share/opencontrol/audit.log", home),
+            log_path: format!("{}/.local/share/openhelm/audit.log", home),
         },
         profiles,
     };
@@ -498,7 +497,7 @@ async fn cmd_setup(
 async fn cmd_start(log_buf: Arc<LogBuffer>) -> Result<()> {
     let cfg = config::Config::load()
         .await
-        .context("Failed to load config. Run `opencontrol setup` first.")?;
+        .context("Failed to load config. Run `openhelm setup` first.")?;
     info!("Starting daemon");
     let daemon = daemon::Daemon::new(cfg, log_buf).await?;
     daemon.run().await
@@ -548,13 +547,13 @@ async fn cmd_status() -> Result<()> {
 
 async fn cmd_restart() -> Result<()> {
     let result = std::process::Command::new("systemctl")
-        .args(["--user", "restart", "opencontrol"])
+        .args(["--user", "restart", "openhelm"])
         .status();
     match result {
-        Ok(status) if status.success() => println!("opencontrol restarted (systemd)"),
+        Ok(status) if status.success() => println!("openhelm restarted (systemd)"),
         _ => bail!(
             "Restart is only supported when running as a systemd service.\n\
-            Install with `opencontrol install-service`, or stop and re-run `opencontrol start`."
+            Install with `openhelm install-service`, or stop and re-run `openhelm start`."
         ),
     }
     Ok(())
@@ -576,7 +575,7 @@ async fn cmd_logs(follow: bool, lines: usize) -> Result<()> {
         Err(err) => {
             eprintln!("Daemon is not running: {}", err);
             eprintln!(
-                "Hint: if running under systemd try: journalctl --user -u opencontrol.service -f"
+                "Hint: if running under systemd try: journalctl --user -u openhelm.service -f"
             );
             return Ok(());
         }
@@ -627,8 +626,8 @@ async fn cmd_pair_list() -> Result<()> {
                         pair.telegram_id, pair.username, pair.requested_at
                     );
                 }
-                println!("\nApprove:  opencontrol pair approve <telegram_id> --profile <name>");
-                println!("Reject:   opencontrol pair reject <telegram_id>");
+                println!("\nApprove:  openhelm pair approve <telegram_id> --profile <name>");
+                println!("Reject:   openhelm pair reject <telegram_id>");
             }
         }
         IpcResponse::Error { message } => bail!("{}", message),
@@ -716,7 +715,7 @@ async fn cmd_profiles_list() -> Result<()> {
         IpcResponse::ProfilesList { mut profiles } => {
             if profiles.is_empty() {
                 println!("No profiles configured.");
-                println!("Add a [profiles.<name>] section to opencontrol.toml.");
+                println!("Add a [profiles.<name>] section to openhelm.toml.");
                 return Ok(());
             }
             profiles.sort_by(|left, right| left.name.cmp(&right.name));
@@ -812,7 +811,7 @@ async fn cmd_chat(profile: String) -> Result<()> {
 
     let socket = &cfg.daemon.socket_path;
 
-    println!("OpenControl CLI Chat [profile: {}]", profile);
+    println!("openhelm CLI Chat [profile: {}]", profile);
     println!("(type 'exit' or Ctrl+C to quit, '/reset' to clear history)");
     println!("{}", "-".repeat(60));
 
@@ -869,7 +868,7 @@ async fn cmd_chat(profile: String) -> Result<()> {
 async fn cmd_install_service() -> Result<()> {
     let binary = std::env::current_exe().context("Cannot determine binary path")?;
     let service = format!(
-        "[Unit]\nDescription=OpenControl AI daemon\nAfter=network.target\n\n\
+        "[Unit]\nDescription=openhelm AI daemon\nAfter=network.target\n\n\
         [Service]\nType=simple\nExecStart={binary} start\n\
         Restart=on-failure\nRestartSec=5\n\n\
         [Install]\nWantedBy=default.target\n",
@@ -880,7 +879,7 @@ async fn cmd_install_service() -> Result<()> {
     let systemd_dir = std::path::PathBuf::from(home).join(".config/systemd/user");
     tokio::fs::create_dir_all(&systemd_dir).await?;
 
-    let unit_path = systemd_dir.join("opencontrol.service");
+    let unit_path = systemd_dir.join("openhelm.service");
     tokio::fs::write(&unit_path, &service).await?;
     println!("Wrote systemd unit to {}", unit_path.display());
 
@@ -889,7 +888,7 @@ async fn cmd_install_service() -> Result<()> {
         .status();
 
     let status = std::process::Command::new("systemctl")
-        .args(["--user", "enable", "opencontrol"])
+        .args(["--user", "enable", "openhelm"])
         .status()
         .context("Failed to run systemctl")?;
 
@@ -900,16 +899,16 @@ async fn cmd_install_service() -> Result<()> {
     }
     println!();
     println!("To manage the service:");
-    println!("  systemctl --user start opencontrol");
-    println!("  systemctl --user stop opencontrol");
-    println!("  systemctl --user status opencontrol");
-    println!("  journalctl --user -u opencontrol.service -f");
+    println!("  systemctl --user start openhelm");
+    println!("  systemctl --user stop openhelm");
+    println!("  systemctl --user status openhelm");
+    println!("  journalctl --user -u openhelm.service -f");
     Ok(())
 }
 
 fn socket_path(cfg: Option<&config::Config>) -> &str {
     cfg.map(|config| config.daemon.socket_path.as_str())
-        .unwrap_or("/tmp/opencontrol.sock")
+        .unwrap_or("/tmp/openhelm.sock")
 }
 
 fn format_uptime(seconds: u64) -> String {
