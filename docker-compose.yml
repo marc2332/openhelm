@@ -1,0 +1,14 @@
+services:
+  opencontrol:
+    build: .
+    container_name: opencontrol
+    restart: unless-stopped
+    volumes:
+      # Mount your config file (required).
+      # Copy opencontrol.example.toml to opencontrol.toml and fill in your values.
+      - ./opencontrol.toml:/root/opencontrol.toml:ro
+      # Persist audit logs across container restarts
+      - opencontrol-data:/root/.local/share/opencontrol
+
+volumes:
+  opencontrol-data:
