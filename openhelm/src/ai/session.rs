@@ -19,9 +19,6 @@ pub enum SessionEvent {
     Typing,
     /// A token-level text chunk from the model - deliver/display immediately.
     Chunk(String),
-    /// Intermediate text produced by the AI alongside tool calls - deliver immediately.
-    /// Kept for backwards-compat; used when the model emits text *before* tool calls.
-    Message(String),
     /// The final reply. May be empty when all content was already sent as `Chunk`
     /// or `Message` events.
     Done(String),
@@ -324,15 +321,8 @@ impl SessionManager {
                     return;
                 }
 
-                // There are tool calls - emit any intermediate text as a
-                // Message event so old callers that don't handle Chunk see it.
-                // (Text was already streamed chunk-by-chunk, so callers that
-                // handle Chunk will have already displayed it.)
-                if let Some(text) = text_content {
-                    if tx.send(SessionEvent::Message(text)).await.is_err() {
-                        return;
-                    }
-                }
+                // text_content was already delivered live as Chunk events;
+                // do not re-emit it as a Message, which would duplicate it.
 
                 debug!(count = tool_calls.len(), "Processing tool calls");
 

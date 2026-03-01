@@ -604,22 +604,6 @@ async fn message_handler(
                     let _ = bot.send_chat_action(msg.chat.id, ChatAction::Typing).await;
                 }
             }
-            SessionEvent::Message(text) => {
-                // Flush any pending chunks first
-                if !chunk_buffer.is_empty() {
-                    let flush = chunk_buffer.drain(..).collect::<String>();
-                    if let Err(e) = send_text(&bot, msg.chat.id, flush.trim()).await {
-                        warn!(error = %e, "Failed to send buffered chunk message");
-                    }
-                }
-                had_intermediate = true;
-                // Start the 12-second timer after the first intermediate
-                // message so subsequent chunks can be flushed periodically.
-                last_flush = Some(Instant::now());
-                if let Err(e) = send_text(&bot, msg.chat.id, &text).await {
-                    warn!(error = %e, "Failed to send intermediate message");
-                }
-            }
             SessionEvent::Done(reply) => {
                 // Combine any remaining buffered chunks with the final reply
                 let mut final_text = String::new();

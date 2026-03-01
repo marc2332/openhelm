@@ -235,7 +235,6 @@ async fn handle_chat_streaming(
         let resp = match event {
             SessionEvent::Typing => continue,
             SessionEvent::Chunk(text) => IpcResponse::ChatChunk { text },
-            SessionEvent::Message(text) => IpcResponse::ChatChunk { text },
             SessionEvent::Done(_) => IpcResponse::ChatDone,
             SessionEvent::Error(err) => IpcResponse::Error {
                 message: err.to_string(),
