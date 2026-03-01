@@ -2,6 +2,9 @@
 
 <img src="./logo.png" alt="openhelm logo" width="150" align="right" />
 
+[![crates.io](https://img.shields.io/crates/v/openhelm.svg)](https://crates.io/crates/openhelm)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 AI-powered bot designed to work on different types of tasks. You talk to it via Telegram. It can act on the host system: reading files, browsing GitHub repos, and more, but limited by a configurable permission and profile system.
 
 > For sake of transparency: This project was 98% done with AI.
@@ -38,7 +41,13 @@ The daemon runs as a background service. Users pair their Telegram account with 
 
 ## Installation
 
-Install openhelm directly from the GitHub repository using Cargo:
+Install the latest release from [crates.io](https://crates.io/crates/openhelm):
+
+```sh
+cargo install openhelm
+```
+
+Or install directly from the GitHub repository to get the latest unreleased changes:
 
 ```sh
 cargo install --git https://github.com/marc2332/openhelm
@@ -258,7 +267,7 @@ The config file is expected at `/root/openhelm.toml` inside the container.
 
 ## Building from source
 
-Requires Rust stable. The workspace contains three crates:
+Requires Rust stable. The workspace contains four crates:
 
 | Crate | Description |
 |---|---|

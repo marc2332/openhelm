@@ -1,19 +1,27 @@
 [package]
 name = "openhelm"
-version = "0.1.0"
-edition = "2024"
+description = "AI-powered Telegram bot and daemon with a configurable skill and tool system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["openhelm", "ai", "telegram", "bot", "daemon"]
+categories = ["command-line-utilities", "asynchronous"]
 
 [[bin]]
 name = "openhelm"
 path = "src/main.rs"
 
 [dependencies]
-openhelm-sdk = { path = "../openhelm-sdk" }
-openhelm-github = { path = "../openhelm-github" }
-openhelm-http = { path = "../openhelm-http" }
+openhelm-sdk.workspace = true
+openhelm-github.workspace = true
+openhelm-http.workspace = true
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 
 # AI client
 rig-core = "0.31"
@@ -22,18 +30,16 @@ rig-core = "0.31"
 rustls = "0.23"
 
 # HTTP client (for OpenRouter)
-reqwest = { version = "0.12", features = [
-  "json",
-], default-features = false, optional = true }
+reqwest = { workspace = true, optional = true }
 
 # Telegram bot
 teloxide = { version = "0.13", features = ["macros"] }
 telegram-markdown-v2 = "0.1"
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
 
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
@@ -46,14 +52,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Error handling
-anyhow = "1"
+anyhow.workspace = true
 thiserror = "1"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 
 # Async utilities
-async-trait = "0.1"
+async-trait.workspace = true
 futures = "0.3"
 tokio-stream = "0.1"
 
@@ -61,4 +67,4 @@ tokio-stream = "0.1"
 dunce = "1"
 
 # Base64 encoding (for image attachments)
-base64 = "0.22"
+base64.workspace = true

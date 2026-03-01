@@ -1,3 +1,39 @@
 [workspace]
 members = ["openhelm", "openhelm-sdk", "openhelm-github", "openhelm-http"]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Marc Espín <mespinsanz@gmail.com>"]
+repository = "https://github.com/marc2332/openhelm"
+homepage = "https://github.com/marc2332/openhelm"
+readme = "README.md"
+
+[workspace.dependencies]
+# Internal crates
+openhelm-sdk = { version = "0.1.0", path = "openhelm-sdk" }
+openhelm-github = { version = "0.1.0", path = "openhelm-github" }
+openhelm-http = { version = "0.1.0", path = "openhelm-http" }
+
+# Async runtime
+tokio = { version = "1", features = ["rt"] }
+
+# Error handling
+anyhow = "1"
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Base64
+base64 = "0.22"
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+# GitHub client
+octocrab = "0.49"
