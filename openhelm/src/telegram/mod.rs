@@ -594,7 +594,7 @@ async fn message_handler(
                     .map(|t| t.elapsed() >= Duration::from_secs(12))
                     .unwrap_or(false);
                 if should_flush && !chunk_buffer.is_empty() {
-                    let flush = chunk_buffer.drain(..).collect::<String>();
+                    let flush = std::mem::take(&mut chunk_buffer);
                     had_intermediate = true;
                     last_flush = Some(Instant::now());
                     if let Err(e) = send_text(&bot, msg.chat.id, flush.trim()).await {
@@ -626,10 +626,10 @@ async fn message_handler(
                 // Only send the final reply if it has content. If intermediate
                 // messages were already sent and the final reply is empty,
                 // there is nothing more to say.
-                if !final_text.is_empty() || !had_intermediate {
-                    if let Err(e) = send_text(&bot, msg.chat.id, &final_text).await {
-                        warn!(error = %e, "Failed to send final reply");
-                    }
+                if (!final_text.is_empty() || !had_intermediate)
+                    && let Err(e) = send_text(&bot, msg.chat.id, &final_text).await
+                {
+                    warn!(error = %e, "Failed to send final reply");
                 }
             }
             SessionEvent::Error(err) => {
@@ -658,16 +658,15 @@ async fn send_text(
     match convert(text) {
         Ok(converted) => {
             for chunk in split_message(&converted, 4096) {
-                if !chunk.is_empty() {
-                    if let Err(e) = bot
+                if !chunk.is_empty()
+                    && let Err(e) = bot
                         .send_message(chat_id, chunk)
                         .parse_mode(ParseMode::MarkdownV2)
                         .await
-                    {
-                        warn!(error = %e, "MarkdownV2 rejected by Telegram, retrying as plain text");
-                        send_plain(bot, chat_id, text).await?;
-                        return Ok(());
-                    }
+                {
+                    warn!(error = %e, "MarkdownV2 rejected by Telegram, retrying as plain text");
+                    send_plain(bot, chat_id, text).await?;
+                    return Ok(());
                 }
             }
         }

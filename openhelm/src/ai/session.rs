@@ -119,7 +119,7 @@ impl SessionManager {
     /// - [`SessionEvent::Chunk`]     – a token-level text delta; display live.
     /// - [`SessionEvent::Message`]   – intermediate text; deliver to the user now.
     /// - [`SessionEvent::Done`]      – final reply (empty when all text was already
-    ///                                 sent as `Chunk`/`Message` events).
+    ///   sent as `Chunk`/`Message` events).
     /// - [`SessionEvent::Error`]     – fatal error; the loop has stopped.
     pub async fn send_message(
         &self,

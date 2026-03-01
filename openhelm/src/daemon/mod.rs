@@ -29,6 +29,18 @@ pub struct Daemon {
     log_buf: Arc<LogBuffer>,
 }
 
+/// Shared daemon state passed to every IPC connection handler.
+#[derive(Clone)]
+struct DaemonContext {
+    config: Arc<RwLock<Config>>,
+    sessions: Arc<SessionManager>,
+    audit: AuditLogger,
+    pending: Arc<RwLock<Vec<PendingPair>>>,
+    bot_connected: Arc<AtomicBool>,
+    log_buf: Arc<LogBuffer>,
+    start_time: Instant,
+}
+
 impl Daemon {
     pub async fn new(config: Config, log_buf: Arc<LogBuffer>) -> Result<Self> {
         let audit = AuditLogger::new(&config.audit.log_path).await?;
@@ -91,36 +103,21 @@ impl Daemon {
             }
         });
 
-        let config = self.config;
-        let sessions = self.sessions;
-        let audit = self.audit;
-        let pending = self.pending_pairs;
-        let bot_connected = self.bot_connected;
-        let log_buf = self.log_buf;
-        let start_time = self.start_time;
+        let ctx = DaemonContext {
+            config: self.config,
+            sessions: self.sessions,
+            audit: self.audit,
+            pending: self.pending_pairs,
+            bot_connected: self.bot_connected,
+            log_buf: self.log_buf,
+            start_time: self.start_time,
+        };
 
         let ipc_handle = tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, _)) => {
-                        tokio::spawn({
-                            let config = config.clone();
-                            let sessions = sessions.clone();
-                            let audit = audit.clone();
-                            let pending = pending.clone();
-                            let bot_connected = bot_connected.clone();
-                            let log_buf = log_buf.clone();
-                            handle_ipc_connection(
-                                stream,
-                                config,
-                                sessions,
-                                audit,
-                                pending,
-                                bot_connected,
-                                log_buf,
-                                start_time,
-                            )
-                        });
+                        tokio::spawn(handle_ipc_connection(stream, ctx.clone()));
                     }
                     Err(err) => {
                         error!(error = %err, "Failed to accept IPC connection");
@@ -138,16 +135,7 @@ impl Daemon {
     }
 }
 
-async fn handle_ipc_connection(
-    mut stream: UnixStream,
-    config: Arc<RwLock<Config>>,
-    sessions: Arc<SessionManager>,
-    audit: AuditLogger,
-    pending: Arc<RwLock<Vec<PendingPair>>>,
-    bot_connected: Arc<AtomicBool>,
-    log_buf: Arc<LogBuffer>,
-    start_time: Instant,
-) {
+async fn handle_ipc_connection(mut stream: UnixStream, ctx: DaemonContext) {
     let req = match recv_request(&mut stream).await {
         Ok(request) => request,
         Err(err) => {
@@ -160,21 +148,11 @@ async fn handle_ipc_connection(
     // responses (ChatChunk / ChatDone) over the socket instead of a
     // single response.
     if let IpcRequest::Chat { message, profile } = req {
-        handle_chat_streaming(&mut stream, message, profile, config, sessions).await;
+        handle_chat_streaming(&mut stream, message, profile, ctx.config, ctx.sessions).await;
         return;
     }
 
-    let resp = dispatch(
-        req,
-        config,
-        sessions,
-        audit,
-        pending,
-        bot_connected,
-        log_buf,
-        start_time,
-    )
-    .await;
+    let resp = dispatch(req, ctx).await;
 
     if let Err(err) = send_response(&mut stream, &resp).await {
         warn!(error = %err, "Failed to send IPC response");
@@ -255,16 +233,16 @@ async fn handle_chat_streaming(
     let _ = send_response(stream, &IpcResponse::ChatDone).await;
 }
 
-async fn dispatch(
-    req: IpcRequest,
-    config: Arc<RwLock<Config>>,
-    sessions: Arc<SessionManager>,
-    audit: AuditLogger,
-    pending: Arc<RwLock<Vec<PendingPair>>>,
-    bot_connected: Arc<AtomicBool>,
-    log_buf: Arc<LogBuffer>,
-    start_time: Instant,
-) -> IpcResponse {
+async fn dispatch(req: IpcRequest, ctx: DaemonContext) -> IpcResponse {
+    let DaemonContext {
+        config,
+        sessions,
+        audit,
+        pending,
+        bot_connected,
+        log_buf,
+        start_time,
+    } = ctx;
     match req {
         IpcRequest::Status => {
             let cfg = config.read().await;
@@ -397,12 +375,10 @@ async fn dispatch(
                     .users
                     .retain(|user| user.telegram_id != telegram_id);
                 let removed = cfg.telegram.users.len() < before;
-                if removed {
-                    if let Err(err) = cfg.save().await {
-                        return IpcResponse::Error {
-                            message: format!("Failed to save config: {}", err),
-                        };
-                    }
+                if removed && let Err(err) = cfg.save().await {
+                    return IpcResponse::Error {
+                        message: format!("Failed to save config: {}", err),
+                    };
                 }
                 removed
             };

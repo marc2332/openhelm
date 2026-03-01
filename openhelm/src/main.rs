@@ -9,7 +9,7 @@ mod telegram;
 mod tools;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use ipc::{IpcRequest, IpcResponse, client_call, client_stream, recv_response_from};
 use log_buffer::LogBuffer;
 use rustls::crypto::ring::default_provider;
@@ -56,32 +56,7 @@ enum Command {
         #[arg(short, long)]
         profile: String,
     },
-    Setup {
-        #[arg(long)]
-        api_url: Option<String>,
-        #[arg(long)]
-        api_key: Option<String>,
-        #[arg(long)]
-        model: Option<String>,
-        #[arg(long)]
-        telegram_token: Option<String>,
-        #[arg(long)]
-        github_token: Option<String>,
-        #[arg(long)]
-        enable_fs: Option<bool>,
-        #[arg(long)]
-        fs_read: Option<Vec<String>>,
-        #[arg(long)]
-        fs_write: Option<Vec<String>>,
-        #[arg(long)]
-        fs_list: Option<Vec<String>>,
-        #[arg(long)]
-        fs_mkdir: Option<Vec<String>>,
-        #[arg(long)]
-        profile: Option<String>,
-        #[arg(long)]
-        force: bool,
-    },
+    Setup(Box<SetupArgs>),
     InstallService,
 }
 
@@ -165,36 +140,7 @@ async fn main() -> Result<()> {
         .init();
 
     match cli.command {
-        Command::Setup {
-            api_url,
-            api_key,
-            model,
-            telegram_token,
-            github_token,
-            enable_fs,
-            fs_read,
-            fs_write,
-            fs_list,
-            fs_mkdir,
-            profile,
-            force,
-        } => {
-            cmd_setup(
-                api_url,
-                api_key,
-                model,
-                telegram_token,
-                github_token,
-                enable_fs,
-                fs_read,
-                fs_write,
-                fs_list,
-                fs_mkdir,
-                profile,
-                force,
-            )
-            .await
-        }
+        Command::Setup(args) => cmd_setup(*args).await,
         Command::Start => cmd_start(log_buf).await,
         Command::Stop => cmd_stop().await,
         Command::Status => cmd_status().await,
@@ -225,20 +171,49 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn cmd_setup(
+#[derive(Args)]
+struct SetupArgs {
+    #[arg(long)]
     api_url: Option<String>,
+    #[arg(long)]
     api_key: Option<String>,
+    #[arg(long)]
     model: Option<String>,
+    #[arg(long)]
     telegram_token: Option<String>,
+    #[arg(long)]
     github_token: Option<String>,
+    #[arg(long)]
     enable_fs: Option<bool>,
+    #[arg(long)]
     fs_read: Option<Vec<String>>,
+    #[arg(long)]
     fs_write: Option<Vec<String>>,
+    #[arg(long)]
     fs_list: Option<Vec<String>>,
+    #[arg(long)]
     fs_mkdir: Option<Vec<String>>,
+    #[arg(long)]
     profile: Option<String>,
+    #[arg(long)]
     force: bool,
-) -> Result<()> {
+}
+
+async fn cmd_setup(args: SetupArgs) -> Result<()> {
+    let SetupArgs {
+        api_url,
+        api_key,
+        model,
+        telegram_token,
+        github_token,
+        enable_fs,
+        fs_read,
+        fs_write,
+        fs_list,
+        fs_mkdir,
+        profile,
+        force,
+    } = args;
     use dialoguer::Input;
     use std::collections::HashMap;
 
@@ -617,10 +592,7 @@ async fn cmd_pair_list() -> Result<()> {
             if pending.is_empty() {
                 println!("No pending pairing requests");
             } else {
-                println!(
-                    "{:<15} {:<20} {}",
-                    "Telegram ID", "Username", "Requested At"
-                );
+                println!("{:<15} {:<20} Requested At", "Telegram ID", "Username");
                 println!("{}", "-".repeat(60));
                 for pair in &pending {
                     println!(
@@ -680,7 +652,7 @@ async fn cmd_users_list() -> Result<()> {
             if users.is_empty() {
                 println!("No paired users");
             } else {
-                println!("{:<15} {:<20} {}", "Telegram ID", "Name", "Profile");
+                println!("{:<15} {:<20} Profile", "Telegram ID", "Name");
                 println!("{}", "-".repeat(50));
                 for user in &users {
                     println!(
@@ -836,7 +808,7 @@ async fn cmd_chat(profile: String) -> Result<()> {
         }
         if input == "/reset" {
             match client_call(
-                &socket,
+                socket,
                 &IpcRequest::ChatReset {
                     profile: profile.clone(),
                 },
@@ -851,7 +823,7 @@ async fn cmd_chat(profile: String) -> Result<()> {
         }
 
         let mut reader = client_stream(
-            &socket,
+            socket,
             &IpcRequest::Chat {
                 message: input.to_string(),
                 profile: profile.clone(),
