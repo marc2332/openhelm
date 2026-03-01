@@ -7,6 +7,8 @@ AI-powered bot designed to work on different types of tasks. You talk to it via 
 > For sake of transparency: This project was 98% done with AI.
 > Use at your own responsibility!
 
+<img src="./demo.png" alt="openhelm demo" align="center" />
+
 ---
 
 ## Table of Contents
