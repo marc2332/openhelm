@@ -21,6 +21,13 @@ bot_token = "<BOT_TOKEN>"
 
 [profiles.ricard]
 system_prompt = "You are a coding assistant. Help with code, files, and projects."
+# Per-profile provider override (optional).
+# When set, this profile uses its own AI provider instead of the global [ai] one.
+# Any field not set here falls back to the global [ai] value.
+# provider = "anthropic"      # "openai", "anthropic", or "openrouter"
+# api_url = "https://api.anthropic.com"
+# api_key = "<PROFILE_SPECIFIC_API_KEY>"
+# model = "claude-sonnet-4-20250514"
 
 [profiles.ricard.permissions]
 fs = true

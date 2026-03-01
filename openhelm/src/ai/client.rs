@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use rig::{
@@ -11,7 +13,7 @@ use tracing::{info, warn};
 
 pub use openhelm_sdk::ToolDefinition;
 
-use crate::config::{AiConfig, ProviderKind};
+use crate::config::{AiConfig, Config, ProviderKind};
 
 #[derive(Clone)]
 enum Provider {
@@ -253,4 +255,49 @@ pub enum FinishReason {
     #[allow(dead_code)]
     Length,
     ToolCalls,
+}
+
+/// Holds a default [`AiClient`] plus optional per-profile overrides.
+///
+/// Profiles that specify custom provider settings (provider, api_url, api_key)
+/// get their own `AiClient`.  All other profiles share the default client built
+/// from the global `[ai]` config.
+#[derive(Clone)]
+pub struct AiClientPool {
+    default: AiClient,
+    overrides: HashMap<String, AiClient>,
+}
+
+impl AiClientPool {
+    /// Build the pool from the full [`Config`].
+    ///
+    /// A default client is created from `config.ai`.  For every profile that
+    /// has at least one provider-level override (`provider`, `api_url`, or
+    /// `api_key`), a dedicated client is created from the merged config
+    /// (profile values overlay the global defaults).
+    pub fn new(config: &Config) -> Result<Self> {
+        let default = AiClient::new(&config.ai).context("Failed to create default AI client")?;
+
+        let mut overrides = HashMap::new();
+        for (name, profile) in &config.profiles {
+            if profile.has_custom_provider() {
+                let ai_config = config.effective_ai_config(name);
+                let client = AiClient::new(&ai_config).with_context(|| {
+                    format!("Failed to create AI client for profile '{}'", name)
+                })?;
+                info!(profile = %name, provider = %ai_config.effective_provider(), "Created per-profile AI client");
+                overrides.insert(name.clone(), client);
+            }
+        }
+
+        Ok(Self { default, overrides })
+    }
+
+    /// Return the [`AiClient`] to use for a given profile name.
+    ///
+    /// If the profile has a dedicated client it is returned; otherwise the
+    /// default global client is used.
+    pub fn client_for(&self, profile_name: &str) -> &AiClient {
+        self.overrides.get(profile_name).unwrap_or(&self.default)
+    }
 }

@@ -109,6 +109,8 @@ pub struct UserInfo {
 pub struct ProfileInfo {
     pub name: String,
     pub model: Option<String>,
+    /// Effective provider name (e.g. "openai", "anthropic", "openrouter").
+    pub provider: String,
     pub has_custom_prompt: bool,
     pub fs_enabled: bool,
     pub fs: Option<FsPermissions>,

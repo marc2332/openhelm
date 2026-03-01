@@ -50,6 +50,16 @@ pub enum ProviderKind {
     OpenRouter,
 }
 
+impl std::fmt::Display for ProviderKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProviderKind::OpenAi => write!(f, "openai"),
+            ProviderKind::Anthropic => write!(f, "anthropic"),
+            ProviderKind::OpenRouter => write!(f, "openrouter"),
+        }
+    }
+}
+
 impl AiConfig {
     /// The default OpenRouter API URL.
     pub const OPENROUTER_URL: &'static str = "https://openrouter.ai/api/v1";
@@ -136,12 +146,30 @@ pub struct Profile {
     pub system_prompt: Option<String>,
     /// Optional model override; falls back to [ai].model
     pub model: Option<String>,
+    /// Optional provider override (`"openai"`, `"anthropic"`, `"openrouter"`);
+    /// falls back to [ai].provider (or auto-detection).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Optional API URL override; falls back to [ai].api_url.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
+    /// Optional API key override; falls back to [ai].api_key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
     #[serde(default)]
     pub permissions: ProfilePermissions,
     /// Filesystem path allowlists; required when permissions.fs = true
     pub fs: Option<FsPermissions>,
     /// Telegram file attachment settings
     pub attachments: Option<AttachmentsConfig>,
+}
+
+impl Profile {
+    /// Returns `true` if this profile overrides any provider-related setting
+    /// (provider, api_url, or api_key), meaning it needs its own `AiClient`.
+    pub fn has_custom_provider(&self) -> bool {
+        self.provider.is_some() || self.api_url.is_some() || self.api_key.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -328,5 +356,36 @@ impl Config {
             .get(&user.profile)
             .and_then(|profile| profile.system_prompt.clone())
             .unwrap_or_else(|| self.ai.system_prompt.clone())
+    }
+
+    /// Build an [`AiConfig`] for a specific profile, merging profile-level
+    /// overrides (provider, api_url, api_key, model) with the global `[ai]`
+    /// defaults.  Fields not set on the profile fall back to the global values.
+    pub fn effective_ai_config(&self, profile_name: &str) -> AiConfig {
+        let profile = self.profiles.get(profile_name);
+        AiConfig {
+            provider: profile
+                .and_then(|p| p.provider.clone())
+                .or_else(|| self.ai.provider.clone()),
+            api_url: profile
+                .and_then(|p| p.api_url.clone())
+                .or_else(|| self.ai.api_url.clone()),
+            api_key: profile
+                .and_then(|p| p.api_key.clone())
+                .unwrap_or_else(|| self.ai.api_key.clone()),
+            model: profile
+                .and_then(|p| p.model.clone())
+                .unwrap_or_else(|| self.ai.model.clone()),
+            system_prompt: profile
+                .and_then(|p| p.system_prompt.clone())
+                .unwrap_or_else(|| self.ai.system_prompt.clone()),
+            session_timeout_minutes: self.ai.session_timeout_minutes,
+        }
+    }
+
+    /// Resolve the effective [`ProviderKind`] for a user (profile → global
+    /// fallback).
+    pub fn effective_provider_kind(&self, user: &TelegramUser) -> ProviderKind {
+        self.effective_ai_config(&user.profile).effective_provider()
     }
 }
