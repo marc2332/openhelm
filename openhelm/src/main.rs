@@ -698,6 +698,7 @@ async fn cmd_profiles_list() -> Result<()> {
                 if let Some(model) = &profile.model {
                     println!("  model:         {}", model);
                 }
+                println!("  provider:      {}", profile.provider);
                 println!("  custom prompt: {}", profile.has_custom_prompt);
                 println!("  permissions:");
                 println!("    fs: {}", profile.fs_enabled);

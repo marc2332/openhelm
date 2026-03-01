@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info, warn};
 
-use super::client::AiClient;
+use super::client::AiClientPool;
 use crate::ai::client::{FinishReason, StreamEvent};
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
@@ -67,7 +67,7 @@ impl Session {
 /// Manages all active in-memory sessions.
 pub struct SessionManager {
     sessions: Arc<RwLock<HashMap<i64, Session>>>,
-    client: AiClient,
+    clients: AiClientPool,
     skills: Arc<SkillRegistry>,
     audit: AuditLogger,
     timeout_minutes: u64,
@@ -75,14 +75,14 @@ pub struct SessionManager {
 
 impl SessionManager {
     pub fn new(
-        client: AiClient,
+        clients: AiClientPool,
         skills: Arc<SkillRegistry>,
         audit: AuditLogger,
         timeout_minutes: u64,
     ) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            client,
+            clients,
             skills,
             audit,
             timeout_minutes,
@@ -192,7 +192,7 @@ impl SessionManager {
 
         // Clone the pieces the spawned task needs.
         let sessions = self.sessions.clone();
-        let client = self.client.clone();
+        let client = self.clients.client_for(&user.profile).clone();
         let audit = self.audit.clone();
         let user = user.clone();
 

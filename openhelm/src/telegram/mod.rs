@@ -206,9 +206,11 @@ async fn command_handler(
                 match config.resolve_profile(profile_name) {
                     Ok(profile) => {
                         let model = config.effective_model(user);
+                        let provider = config.effective_provider_kind(user);
                         let mut lines = vec![
-                            format!("Profile: {}", profile_name),
-                            format!("Model:   {}", model),
+                            format!("Profile:  {}", profile_name),
+                            format!("Model:    {}", model),
+                            format!("Provider: {}", provider),
                         ];
 
                         if profile.system_prompt.is_some() {

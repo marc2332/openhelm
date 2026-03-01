@@ -7,7 +7,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::ai::client::AiClient;
+use crate::ai::client::AiClientPool;
 use crate::ai::session::{SessionEvent, SessionManager};
 use crate::audit::{AuditEvent, AuditLogger, Channel};
 use crate::config::{Config, TelegramUser};
@@ -44,11 +44,11 @@ struct DaemonContext {
 impl Daemon {
     pub async fn new(config: Config, log_buf: Arc<LogBuffer>) -> Result<Self> {
         let audit = AuditLogger::new(&config.audit.log_path).await?;
-        let client = AiClient::new(&config.ai)?;
+        let clients = AiClientPool::new(&config)?;
         let skills = Arc::new(SkillRegistry::new());
         let timeout_minutes = config.ai.session_timeout_minutes;
         let sessions = Arc::new(SessionManager::new(
-            client,
+            clients,
             skills,
             audit.clone(),
             timeout_minutes,
@@ -405,12 +405,16 @@ async fn dispatch(req: IpcRequest, ctx: DaemonContext) -> IpcResponse {
             let profiles = cfg
                 .profiles
                 .iter()
-                .map(|(name, profile)| ProfileInfo {
-                    name: name.clone(),
-                    model: profile.model.clone(),
-                    has_custom_prompt: profile.system_prompt.is_some(),
-                    fs_enabled: profile.permissions.fs,
-                    fs: profile.fs.clone(),
+                .map(|(name, profile)| {
+                    let effective_ai = cfg.effective_ai_config(name);
+                    ProfileInfo {
+                        name: name.clone(),
+                        model: profile.model.clone(),
+                        provider: effective_ai.effective_provider().to_string(),
+                        has_custom_prompt: profile.system_prompt.is_some(),
+                        fs_enabled: profile.permissions.fs,
+                        fs: profile.fs.clone(),
+                    }
                 })
                 .collect();
             IpcResponse::ProfilesList { profiles }
